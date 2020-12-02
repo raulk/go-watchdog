@@ -58,7 +58,7 @@ type PolicyInput struct {
 	MemStats  *runtime.MemStats
 	SysStats  *gosigar.Mem
 	GCTrigger bool // is this a GC trigger?
-	Logger    *log.Logger
+	Logger    Logger
 }
 
 // Policy encapsulates the logic that the watchdog will run on every tick.
@@ -93,12 +93,9 @@ type MemConfig struct {
 	// callbacks, without triggering actual GC.
 	NotifyOnly bool
 
-	// Logger is the logger to use. If nil, it will default to a new log package
-	// logger that uses the same io.Writer as the
-	//
-	// To use a zap logger, wrap it in a standard logger using use
-	// zap.NewStdLog().
-	Logger *log.Logger
+	// Logger is the logger to use. If nil, it will default to a logger that
+	// proxies to a standard logger using the "[watchdog]" prefix.
+	Logger Logger
 }
 
 // Memory starts the singleton memory watchdog with the provided configuration.
@@ -108,7 +105,7 @@ func Memory(config MemConfig) (err error, stop func()) {
 	}
 
 	if config.Logger == nil {
-		config.Logger = log.New(log.Writer(), "[watchdog] ", log.LstdFlags|log.Lmsgprefix)
+		config.Logger = &stdlog{log: log.New(log.Writer(), "[watchdog] ", log.LstdFlags|log.Lmsgprefix)}
 	}
 
 	// if the user didn't provide a limit, get the total memory.
@@ -150,7 +147,7 @@ func watch() {
 		select {
 		case gcTriggered <- struct{}{}:
 		default:
-			config.Logger.Printf("failed to queue gc trigger; channel backlogged")
+			config.Logger.Warnf("failed to queue gc trigger; channel backlogged")
 		}
 		runtime.SetFinalizer(o, finalizer)
 	}
@@ -218,10 +215,15 @@ func watch() {
 		//
 		// See: https://github.com/golang/go/issues/19812
 		// See: https://github.com/prometheus/client_golang/issues/403
+
+		if eventIsGc {
+			config.Logger.Infof("watchdog after GC")
+		}
+
 		runtime.ReadMemStats(&memstats)
 
 		if err := sysmem.Get(); err != nil {
-			config.Logger.Printf("failed to obtain system memory stats ")
+			config.Logger.Warnf("failed to obtain system memory stats; err: %s", err)
 		}
 
 		trigger := config.Policy.Evaluate(PolicyInput{
@@ -237,16 +239,19 @@ func watch() {
 			continue
 		}
 
+		config.Logger.Infof("watchdog policy fired")
+
 		if f := config.NotifyFired; f != nil {
 			f()
 		}
 
 		if !config.NotifyOnly {
-			config.Logger.Printf("watchdog policy fired: triggering GC")
+			config.Logger.Infof("watchdog is triggering GC")
+			start := time.Now()
 			runtime.GC()
-			config.Logger.Printf("GC finished")
+			runtime.ReadMemStats(&memstats)
+			config.Logger.Infof("watchdog-triggered GC finished; took: %s; current heap allocated: %d bytes", time.Since(start), memstats.HeapAlloc)
 		}
-
 	}
 }
 

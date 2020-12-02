@@ -1,6 +1,8 @@
 package watchdog
 
 import (
+	"log"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -16,6 +18,8 @@ var (
 	secondWatermark           = 0.75
 	thirdWatermark            = 0.80
 	emergencyWatermark        = 0.90
+
+	logger = &stdlog{log: log.New(os.Stdout, "[watchdog test] ", log.LstdFlags|log.Lmsgprefix), debug: true}
 )
 
 func TestProgressiveWatermarksSystem(t *testing.T) {
@@ -28,6 +32,7 @@ func TestProgressiveWatermarksSystem(t *testing.T) {
 	}
 
 	require.False(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		SysStats: &gosigar.Mem{ActualUsed: uint64(float64(limit)*firstWatermark) - 1},
@@ -35,6 +40,7 @@ func TestProgressiveWatermarksSystem(t *testing.T) {
 
 	// trigger the first watermark.
 	require.True(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: uint64(time.Now().UnixNano())},
@@ -44,6 +50,7 @@ func TestProgressiveWatermarksSystem(t *testing.T) {
 	// this won't fire because we're still on the same watermark.
 	for i := 0; i < 100; i++ {
 		require.False(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(time.Now().UnixNano())},
@@ -53,6 +60,7 @@ func TestProgressiveWatermarksSystem(t *testing.T) {
 
 	// now let's move to the second watermark.
 	require.True(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: uint64(time.Now().UnixNano())},
@@ -62,6 +70,7 @@ func TestProgressiveWatermarksSystem(t *testing.T) {
 	// this won't fire because we're still on the same watermark.
 	for i := 0; i < 100; i++ {
 		require.False(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -71,6 +80,7 @@ func TestProgressiveWatermarksSystem(t *testing.T) {
 
 	// now let's move to the third and last watermark.
 	require.True(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -80,6 +90,7 @@ func TestProgressiveWatermarksSystem(t *testing.T) {
 	// this won't fire because we're still on the same watermark.
 	for i := 0; i < 100; i++ {
 		require.False(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -99,6 +110,7 @@ func TestProgressiveWatermarksHeap(t *testing.T) {
 	// now back up step by step, check that all of them fire.
 	for _, wm := range []float64{firstWatermark, secondWatermark, thirdWatermark} {
 		require.True(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeHeap,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(0), HeapAlloc: uint64(float64(limit) * wm)},
@@ -117,6 +129,7 @@ func TestDownscalingWatermarks_Reentrancy(t *testing.T) {
 
 	// crank all the way to the top.
 	require.True(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -126,6 +139,7 @@ func TestDownscalingWatermarks_Reentrancy(t *testing.T) {
 	// now back down, checking that none of the boundaries fire.
 	for _, wm := range []float64{thirdWatermark, secondWatermark, firstWatermark} {
 		require.False(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -136,6 +150,7 @@ func TestDownscalingWatermarks_Reentrancy(t *testing.T) {
 	// now back up step by step, check that all of them fire.
 	for _, wm := range []float64{firstWatermark, secondWatermark, thirdWatermark} {
 		require.True(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -146,6 +161,7 @@ func TestDownscalingWatermarks_Reentrancy(t *testing.T) {
 	// check the top does not fire because it already fired.
 	for i := 0; i < 100; i++ {
 		require.False(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -167,6 +183,7 @@ func TestEmergencyWatermark(t *testing.T) {
 	// every tick triggers, even within the silence period.
 	for i := 0; i < 100; i++ {
 		require.True(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(clk.Now().UnixNano())},
@@ -185,6 +202,7 @@ func TestJumpWatermark(t *testing.T) {
 
 	// check that jumping to the top only fires once.
 	require.True(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -193,6 +211,7 @@ func TestJumpWatermark(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		require.False(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(0)},
@@ -221,6 +240,7 @@ func TestSilencePeriod(t *testing.T) {
 	// going above the first threshold, but within silencing period, so nothing happens.
 	for i := 0; i < 100; i++ {
 		require.False(t, p.Evaluate(PolicyInput{
+			Logger:   logger,
 			Scope:    ScopeSystem,
 			Limit:    limit,
 			MemStats: &runtime.MemStats{LastGC: uint64(clk.Now().UnixNano())},
@@ -232,6 +252,7 @@ func TestSilencePeriod(t *testing.T) {
 	clk.Add(time.Minute)
 
 	require.True(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: 0},
@@ -240,6 +261,7 @@ func TestSilencePeriod(t *testing.T) {
 
 	// but not the second time.
 	require.False(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: 0},
@@ -248,6 +270,7 @@ func TestSilencePeriod(t *testing.T) {
 
 	// now let's go up inside the silencing period, nothing happens.
 	require.False(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: uint64(clk.Now().UnixNano())},
@@ -256,6 +279,7 @@ func TestSilencePeriod(t *testing.T) {
 
 	// same thing, outside the silencing period should trigger.
 	require.True(t, p.Evaluate(PolicyInput{
+		Logger:   logger,
 		Scope:    ScopeSystem,
 		Limit:    limit,
 		MemStats: &runtime.MemStats{LastGC: uint64(0)},

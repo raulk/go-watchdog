@@ -60,6 +60,8 @@ func (w *WatermarkPolicy) Evaluate(input PolicyInput) (trigger bool) {
 		w.silenceNs = w.Silence.Nanoseconds()
 		w.lastIdx = len(w.Watermarks) - 1
 		w.initialized = true
+		input.Logger.Infof("initialized watermark watchdog policy; watermarks: %v; emergency watermark: %f, thresholds: %v; silence period: %s",
+			w.Watermarks, w.EmergencyWatermark, w.thresholds, w.Silence)
 	}
 
 	// determine the value to compare utilisation against.
@@ -71,11 +73,17 @@ func (w *WatermarkPolicy) Evaluate(input PolicyInput) (trigger bool) {
 		actual = input.MemStats.HeapAlloc
 	}
 
+	input.Logger.Debugf("watermark policy: evaluating; curr_watermark: %f, utilization: %d/%d/%d (used/curr_threshold/limit)",
+		w.Watermarks[w.currIdx], actual, w.thresholds[w.currIdx], input.Limit)
+
 	// determine whether we're past the emergency watermark; if we are, we fire
 	// unconditionally. Disabled if 0.
 	if w.EmergencyWatermark > 0 {
 		currPercentage := math.Round((float64(actual)/float64(input.Limit))*DecimalPrecision) / DecimalPrecision // round float.
 		if pastEmergency := currPercentage >= w.EmergencyWatermark; pastEmergency {
+			emergencyThreshold := uint64(float64(input.Limit) / w.EmergencyWatermark)
+			input.Logger.Infof("watermark policy: emergency trigger; perc: %f/%f (%% used/%% emergency), utilization: %d/%d/%d (used/emergency/limit), used: %d, limit: %d, ",
+				currPercentage, w.EmergencyWatermark, actual, emergencyThreshold, input.Limit)
 			return true
 		}
 	}
@@ -84,6 +92,7 @@ func (w *WatermarkPolicy) Evaluate(input PolicyInput) (trigger bool) {
 	if silencing := w.silenceNs > 0; silencing {
 		now := Clock.Now().UnixNano()
 		if elapsed := now - int64(input.MemStats.LastGC); elapsed < w.silenceNs {
+			input.Logger.Debugf("watermark policy: silenced")
 			return false
 		}
 	}
@@ -104,6 +113,7 @@ func (w *WatermarkPolicy) Evaluate(input PolicyInput) (trigger bool) {
 	// we are above our current watermark, but if this is the last watermark and
 	// we've already fired, suppress the firing.
 	if w.currIdx == w.lastIdx && w.firedLast {
+		input.Logger.Debugf("watermark policy: last watermark already fired; skipping")
 		return false
 	}
 
@@ -113,8 +123,11 @@ func (w *WatermarkPolicy) Evaluate(input PolicyInput) (trigger bool) {
 	if actual >= w.thresholds[w.lastIdx] {
 		w.currIdx = w.lastIdx
 		w.firedLast = true
+		input.Logger.Infof("watermark policy triggering: %f watermark surpassed", w.Watermarks[w.currIdx])
 		return true
 	}
+
+	input.Logger.Infof("watermark policy triggering: %f watermark surpassed", w.Watermarks[w.currIdx])
 
 	// we are triggering; update the current watermark, upscaling it to the
 	// next threshold.
