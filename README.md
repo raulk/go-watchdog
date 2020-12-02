@@ -2,7 +2,7 @@
 
 > 🐺 A library to curb OOMs by running Go GC according to a user-defined policy.
 
-go-memwd runs a singleton memory watchdog. It takes system and heap memory
+go-watchdog runs a singleton memory watchdog. It takes system and heap memory
 readings periodically, and feeds them to a user-defined policy to determine
 whether GC needs to run immediately.
 

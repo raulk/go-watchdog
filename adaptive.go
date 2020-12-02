@@ -1,7 +1,8 @@
 package watchdog
 
-// AdaptivePolicy is a policy that forces GC when the usage surpasses the
-// available memory after the last GC run.
+// AdaptivePolicy is a policy that forces GC when the usage surpasses a
+// user-configured percentage (Factor) of the available memory that remained
+// after the last GC run.
 //
 // TODO tests
 type AdaptivePolicy struct {

@@ -1,4 +1,4 @@
-module github.com/raulk/go-memwd
+module github.com/raulk/go-watchdog
 
 go 1.15
 
