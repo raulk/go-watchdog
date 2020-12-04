@@ -2,17 +2,17 @@ package watchdog
 
 import "log"
 
-// Logger is an interface to be implemented by custom loggers.
-type Logger interface {
+// logger is an interface to be implemented by custom loggers.
+type logger interface {
 	Debugf(template string, args ...interface{})
 	Infof(template string, args ...interface{})
 	Warnf(template string, args ...interface{})
 	Errorf(template string, args ...interface{})
 }
 
-var _ Logger = (*stdlog)(nil)
+var _ logger = (*stdlog)(nil)
 
-// stdlog is a Logger that proxies to a standard log.Logger.
+// stdlog is a logger that proxies to a standard log.logger.
 type stdlog struct {
 	log   *log.Logger
 	debug bool

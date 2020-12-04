@@ -1,54 +1,32 @@
 package watchdog
 
-// AdaptivePolicy is a policy that forces GC when the usage surpasses a
-// user-configured percentage (Factor) of the available memory that remained
-// after the last GC run.
+// NewAdaptivePolicy creates a policy that forces GC when the usage surpasses a
+// user-configured percentage (factor) of the available memory.
 //
-// TODO tests
-type AdaptivePolicy struct {
-	// Factor determines how much this policy will let the heap expand
-	// before it triggers.
-	//
-	// On every GC run, this policy recalculates the next target as
-	// (limit-currentHeap)*Factor (i.e. available*Factor).
-	//
-	// If the GC target calculated by the runtime is lower than the one
-	// calculated by this policy, this policy will set the new target, but the
-	// effect will be nil, since the the go runtime will run GC sooner than us
-	// anyway.
-	Factor float64
-
-	active      bool
-	target      uint64
-	initialized bool
+// This policy recalculates the next target as usage+(limit-usage)*factor, and
+// forces immediate GC when used >= limit.
+func NewAdaptivePolicy(factor float64) PolicyCtor {
+	return func(limit uint64) (Policy, error) {
+		return &adaptivePolicy{
+			factor: factor,
+			limit:  limit,
+		}, nil
+	}
 }
 
-var _ Policy = (*AdaptivePolicy)(nil)
+type adaptivePolicy struct {
+	factor float64
+	limit  uint64
+}
 
-func (a *AdaptivePolicy) Evaluate(input PolicyInput) (trigger bool) {
-	if !a.initialized {
-		// when initializing, set the target to the limit; it will be reset
-		// when the first GC happens.
-		a.target = input.Limit
-		a.initialized = true
-	}
+var _ Policy = (*adaptivePolicy)(nil)
 
-	// determine the value to compare utilisation against.
-	var actual uint64
-	switch input.Scope {
-	case ScopeSystem:
-		actual = input.SysStats.ActualUsed
-	case ScopeHeap:
-		actual = input.MemStats.HeapAlloc
+func (p *adaptivePolicy) Evaluate(_ UtilizationType, used uint64) (next uint64, immediate bool) {
+	if used >= p.limit {
+		return used, true
 	}
 
-	if input.GCTrigger {
-		available := float64(input.Limit) - float64(actual)
-		calc := uint64(available * a.Factor)
-		a.target = calc
-	}
-	if actual >= a.target {
-		return true
-	}
-	return false
+	available := float64(p.limit) - float64(used)
+	next = used + uint64(available*p.factor)
+	return next, false
 }
