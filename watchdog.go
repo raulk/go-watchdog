@@ -26,14 +26,18 @@ var (
 
 const (
 	// stateUnstarted represents an unstarted state.
-	stateUnstarted int64 = iota
-	// stateStarted represents a started state.
-	stateStarted
+	stateUnstarted int32 = iota
+	// stateRunning represents an operational state.
+	stateRunning
+	// stateClosing represents a temporary closing state.
+	stateClosing
 )
 
-// watchdog is a global singleton watchdog.
-var watchdog struct {
-	state  int64
+// _watchdog is a global singleton watchdog.
+var _watchdog struct {
+	state         int32 // guarded by atomic, one of state* constants.
+	finalizerSkip int32 // guarded by atomic; signals to the sentinel finalizer that it should skip notifying.
+
 	config MemConfig
 
 	closing chan struct{}
@@ -52,6 +56,7 @@ const (
 )
 
 // PolicyInput is the object that's passed to a policy when evaluating it.
+//
 type PolicyInput struct {
 	Scope     ScopeType
 	Limit     uint64
@@ -100,7 +105,7 @@ type MemConfig struct {
 
 // Memory starts the singleton memory watchdog with the provided configuration.
 func Memory(config MemConfig) (err error, stop func()) {
-	if !atomic.CompareAndSwapInt64(&watchdog.state, stateUnstarted, stateStarted) {
+	if !atomic.CompareAndSwapInt32(&_watchdog.state, stateUnstarted, stateRunning) {
 		return ErrAlreadyStarted, nil
 	}
 
@@ -117,10 +122,10 @@ func Memory(config MemConfig) (err error, stop func()) {
 		config.Limit = mem.Total
 	}
 
-	watchdog.config = config
-	watchdog.closing = make(chan struct{})
+	_watchdog.config = config
+	_watchdog.closing = make(chan struct{})
 
-	watchdog.wg.Add(1)
+	_watchdog.wg.Add(1)
 	go watch()
 
 	return nil, stopMemory
@@ -128,32 +133,46 @@ func Memory(config MemConfig) (err error, stop func()) {
 
 func watch() {
 	var (
-		lk          sync.Mutex // guards gcTriggered channel, which is drained and flipped to nil on closure.
 		gcTriggered = make(chan struct{}, 16)
 
 		memstats runtime.MemStats
 		sysmem   gosigar.Mem
-		config   = watchdog.config
+		config   = _watchdog.config
 	)
 
 	// this non-zero sized struct is used as a sentinel to detect when a GC
 	// run has finished, by setting and resetting a finalizer on it.
+	// it essentially creates a GC notification "flywheel"; every GC will
+	// trigger this finalizer, which will reset itself so it gets notified
+	// of the next GC, breaking the cycle when the watchdog is stopped.
 	type sentinel struct{ a *int }
-	var sentinelObj sentinel
 	var finalizer func(o *sentinel)
 	finalizer = func(o *sentinel) {
-		lk.Lock()
-		defer lk.Unlock()
+		if atomic.LoadInt32(&_watchdog.state) != stateRunning {
+			// this GC triggered after the watchdog was stopped; ignore
+			// and do not reset the finalizer.
+			return
+		}
+
+		// reset so it triggers on the next GC.
+		runtime.SetFinalizer(o, finalizer)
+
+		if atomic.LoadInt32(&_watchdog.finalizerSkip) == 1 {
+			return // requested a skip.
+		}
+
 		select {
 		case gcTriggered <- struct{}{}:
 		default:
 			config.Logger.Warnf("failed to queue gc trigger; channel backlogged")
 		}
-		runtime.SetFinalizer(o, finalizer)
 	}
-	finalizer(&sentinelObj)
 
-	defer watchdog.wg.Done()
+	finalizer(&sentinel{}) // start the flywheel.
+
+	defer func() {
+		_watchdog.wg.Done()
+	}()
 	for {
 		var eventIsGc bool
 		select {
@@ -164,18 +183,13 @@ func watch() {
 			eventIsGc = true
 			// exit select.
 
-		case <-watchdog.closing:
-			runtime.SetFinalizer(&sentinelObj, nil) // clear the sentinel finalizer.
-
-			lk.Lock()
-			ch := gcTriggered
-			gcTriggered = nil
-			lk.Unlock()
-
+		case <-_watchdog.closing:
 			// close and drain
-			close(ch)
-			for range ch {
+			close(gcTriggered)
+			for range gcTriggered {
 			}
+			gcTriggered = nil
+
 			return
 		}
 
@@ -217,7 +231,7 @@ func watch() {
 		// See: https://github.com/prometheus/client_golang/issues/403
 
 		if eventIsGc {
-			config.Logger.Infof("watchdog after GC")
+			config.Logger.Infof("watchdog called after GC")
 		}
 
 		runtime.ReadMemStats(&memstats)
@@ -247,18 +261,31 @@ func watch() {
 
 		if !config.NotifyOnly {
 			config.Logger.Infof("watchdog is triggering GC")
+
+			atomic.StoreInt32(&_watchdog.finalizerSkip, 1)
+
+			// it's safe to assume that the finalizer will attempt to run before runtime.GC returns
+			// because runtime.GC() waits for the sweep phase to finish before returning.
+			// finalizers are run in the sweep phase.
 			start := time.Now()
 			runtime.GC()
+			took := time.Since(start)
+
+			atomic.StoreInt32(&_watchdog.finalizerSkip, 0)
+
 			runtime.ReadMemStats(&memstats)
-			config.Logger.Infof("watchdog-triggered GC finished; took: %s; current heap allocated: %d bytes", time.Since(start), memstats.HeapAlloc)
+			config.Logger.Infof("watchdog-triggered GC finished; took: %s; current heap allocated: %d bytes", took, memstats.HeapAlloc)
 		}
 	}
 }
 
 func stopMemory() {
-	if !atomic.CompareAndSwapInt64(&watchdog.state, stateStarted, stateUnstarted) {
+	if !atomic.CompareAndSwapInt32(&_watchdog.state, stateRunning, stateClosing) {
 		return
 	}
-	close(watchdog.closing)
-	watchdog.wg.Wait()
+
+	close(_watchdog.closing)
+	_watchdog.wg.Wait()
+
+	atomic.StoreInt32(&_watchdog.state, stateUnstarted)
 }
