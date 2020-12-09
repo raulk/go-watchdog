@@ -205,7 +205,7 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 			// calculate how much to set GOGC to honour the next trigger point.
 			currGOGC = int(((float64(next) / float64(heapMarked)) - float64(1)) * 100)
 			if currGOGC >= originalGOGC {
-				Logger.Infof("heap watchdog: requested GOGC percent higher than default; capping at default; requested: %d; default: %d", currGOGC, originalGOGC)
+				Logger.Debugf("heap watchdog: requested GOGC percent higher than default; capping at default; requested: %d; default: %d", currGOGC, originalGOGC)
 				currGOGC = originalGOGC
 			} else {
 				if currGOGC < 1 {
