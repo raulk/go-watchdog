@@ -5,9 +5,17 @@
 [![godocs](https://img.shields.io/badge/godoc-reference-5272B4.svg?style=flat-square)](https://godoc.org/github.com/raulk/go-watchdog)
 [![build status](https://circleci.com/gh/raulk/go-watchdog.svg?style=svg)](<LINK>)
 
-go-watchdog runs a singleton memory watchdog. It takes system and heap memory
-readings periodically, and feeds them to a user-defined policy to determine
-whether GC needs to run immediately.
+go-watchdog runs a singleton memory watchdog in the process, which watches
+memory utilization and forces Go GC in accordance with a user-defined policy.
+
+There are two kinds of watchdog so far:
+
+* **heap-driven:** applies a limit to the heap, and obtains current usage through
+  `runtime.ReadMemStats()`.
+* **system-driven:** applies a limit to the total system memory used, and obtains
+  current usage through [`elastic/go-sigar`](https://github.com/elastic/gosigar).
+
+A third process-driven watchdog that uses cgroups is underway.
 
 This library ships with two policies out of the box:
 
@@ -18,12 +26,6 @@ This library ships with two policies out of the box:
   
 You can easily build a custom policy tailored to the allocation patterns of your
 program.
-
-It is recommended that you set both (a) a memory limit and (b) a scope of
-application of that limit (system or heap) when you start the watchdog.
-Otherwise, go-watchdog will use the system scope, and will default to the
-total system memory as the limit. [elastic/go-sigar](https://github.com/elastic/gosigar)
-is used to make the discovery.
 
 ## Why is this even needed?
 
