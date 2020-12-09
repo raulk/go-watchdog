@@ -3,7 +3,7 @@
 > 🐺 A library to curb OOMs by running Go GC according to a user-defined policy.
 
 [![godocs](https://img.shields.io/badge/godoc-reference-5272B4.svg?style=flat-square)](https://godoc.org/github.com/raulk/go-watchdog)
-[![build status](https://circleci.com/gh/raulk/go-watchdog.svg?style=svg)](<LINK>)
+[![build status](https://circleci.com/gh/raulk/go-watchdog.svg?style=svg)](https://circleci.com/gh/raulk/go-watchdog)
 
 go-watchdog runs a singleton memory watchdog in the process, which watches
 memory utilization and forces Go GC in accordance with a user-defined policy.
