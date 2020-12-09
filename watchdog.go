@@ -180,6 +180,7 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 			heapMarked := uint64(float64(memstats.NextGC) / (1 + float64(currGOGC)/100))
 			if heapMarked == 0 {
 				// this shouldn't happen, but just in case; avoiding a div by 0.
+				Logger.Warnf("heap-driven watchdog: inferred zero heap marked; skipping evaluation")
 				continue
 			}
 
