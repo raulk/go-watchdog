@@ -149,7 +149,7 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 	_watchdog.scope = UtilizationHeap
 	_watchdog.closing = make(chan struct{})
 
-	var gcTriggered = make(chan struct{}, 16)
+	gcTriggered := make(chan struct{}, 16)
 	setupGCSentinel(gcTriggered)
 
 	_watchdog.wg.Add(1)
@@ -256,7 +256,7 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 	_watchdog.scope = UtilizationSystem
 	_watchdog.closing = make(chan struct{})
 
-	var gcTriggered = make(chan struct{}, 16)
+	gcTriggered := make(chan struct{}, 16)
 	setupGCSentinel(gcTriggered)
 
 	_watchdog.wg.Add(1)
