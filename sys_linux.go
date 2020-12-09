@@ -1,6 +1,8 @@
 package watchdog
 
 import (
+	"os"
+
 	"github.com/containerd/cgroups"
 )
 
