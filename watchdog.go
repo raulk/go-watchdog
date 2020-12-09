@@ -3,6 +3,7 @@ package watchdog
 import (
 	"fmt"
 	"log"
+	"math"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -11,6 +12,11 @@ import (
 	"github.com/elastic/gosigar"
 	"github.com/raulk/clock"
 )
+
+// PolicyTempDisabled is a marker value for policies to signal that the policy
+// is temporarily disabled. Use it when all hope is lost to turn around from
+// significant memory pressure (such as when above an "extreme" watermark).
+const PolicyTempDisabled uint64 = math.MaxUint64
 
 // The watchdog is designed to be used as a singleton; global vars are OK for
 // that reason.
@@ -110,24 +116,15 @@ type PolicyCtor func(limit uint64) (Policy, error)
 type Policy interface {
 	// Evaluate determines when the next GC should take place. It receives the
 	// current usage, and it returns the next usage at which to trigger GC.
-	//
-	// The policy can request immediate GC, in which case next should match the
-	// used memory.
-	Evaluate(scope UtilizationType, used uint64) (next uint64, immediate bool)
+	Evaluate(scope UtilizationType, used uint64) (next uint64)
 }
 
 // HeapDriven starts a singleton heap-driven watchdog.
 //
 // The heap-driven watchdog adjusts GOGC dynamically after every GC, to honour
-// the policy. When an immediate GC is requested, runtime.GC() is called, and
-// the policy is re-evaluated at the end of GC.
+// the policy requirements.
 //
-// It is entirely possible for the policy to keep requesting immediate GC
-// repeateadly. This usually signals an emergency situation, and won't prevent
-// the program from making progress, since the Go's garbage collection is not
-// stop-the-world (for the major part).
-//
-// A limit value of 0 will error.
+// A zero-valued limit will error.
 func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) {
 	_watchdog.lk.Lock()
 	defer _watchdog.lk.Unlock()
@@ -185,24 +182,11 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 			}
 
 			// evaluate the policy.
-			next, immediate := policy.Evaluate(UtilizationHeap, memstats.HeapAlloc)
-
-			if immediate {
-				// trigger a forced GC; because we're not making the finalizer
-				// skip sending to the trigger channel, we will get fired again.
-				// at this stage, the program is under significant pressure, and
-				// given that Go GC is not STW for the largest part, the worse
-				// thing that could happen from infinitely GC'ing is that the
-				// program will run in a degrated state for longer, possibly
-				// long enough for an operator to intervene.
-				Logger.Warnf("heap-driven watchdog requested immediate GC; " +
-					"system is probably under significant pressure; " +
-					"performance compromised")
-				forceGC(&memstats)
-				continue
-			}
+			next := policy.Evaluate(UtilizationHeap, memstats.HeapAlloc)
 
 			// calculate how much to set GOGC to honour the next trigger point.
+			// next=PolicyTempDisabled value would make currGOGC extremely high,
+			// greater than originalGOGC, and therefore we'd restore originalGOGC.
 			currGOGC = int(((float64(next) / float64(heapMarked)) - float64(1)) * 100)
 			if currGOGC >= originalGOGC {
 				Logger.Debugf("heap watchdog: requested GOGC percent higher than default; capping at default; requested: %d; default: %d", currGOGC, originalGOGC)
@@ -270,14 +254,18 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 			threshold uint64
 		)
 
-		// initialize the threshold.
-		threshold, immediate := policy.Evaluate(UtilizationSystem, sysmem.ActualUsed)
-		if immediate {
-			Logger.Warnf("system-driven watchdog requested immediate GC upon startup; " +
-				"policy is probably misconfigured; " +
-				"performance compromised")
-			forceGC(&memstats)
+		renewThreshold := func() {
+			// get the current usage.
+			if err := sysmemFn(&sysmem); err != nil {
+				Logger.Warnf("failed to obtain system memory stats; err: %s", err)
+				return
+			}
+			// calculate the threshold.
+			threshold = policy.Evaluate(UtilizationSystem, sysmem.ActualUsed)
 		}
+
+		// initialize the threshold.
+		renewThreshold()
 
 		for {
 			select {
@@ -300,18 +288,7 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 			case <-gcTriggered:
 				NotifyFired()
 
-				// get the current usage.
-				if err := sysmemFn(&sysmem); err != nil {
-					Logger.Warnf("failed to obtain system memory stats; err: %s", err)
-					continue
-				}
-
-				// adjust the threshold.
-				threshold, immediate = policy.Evaluate(UtilizationSystem, sysmem.ActualUsed)
-				if immediate {
-					Logger.Warnf("system-driven watchdog triggering immediate GC; %d used bytes", sysmem.ActualUsed)
-					forceGC(&memstats)
-				}
+				renewThreshold()
 
 			case <-_watchdog.closing:
 				return

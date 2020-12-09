@@ -3,8 +3,7 @@ package watchdog
 // NewAdaptivePolicy creates a policy that forces GC when the usage surpasses a
 // user-configured percentage (factor) of the available memory.
 //
-// This policy recalculates the next target as usage+(limit-usage)*factor, and
-// forces immediate GC when used >= limit.
+// This policy recalculates the next target as usage+(limit-usage)*factor.
 func NewAdaptivePolicy(factor float64) PolicyCtor {
 	return func(limit uint64) (Policy, error) {
 		return &adaptivePolicy{
@@ -21,12 +20,12 @@ type adaptivePolicy struct {
 
 var _ Policy = (*adaptivePolicy)(nil)
 
-func (p *adaptivePolicy) Evaluate(_ UtilizationType, used uint64) (next uint64, immediate bool) {
+func (p *adaptivePolicy) Evaluate(_ UtilizationType, used uint64) (next uint64) {
 	if used >= p.limit {
-		return used, true
+		return used
 	}
 
 	available := float64(p.limit) - float64(used)
 	next = used + uint64(available*p.factor)
-	return next, false
+	return next
 }

@@ -15,17 +15,14 @@ func TestAdaptivePolicy(t *testing.T) {
 	require.NoError(t, err)
 
 	// at zero; next = 50%.
-	next, immediate := p.Evaluate(UtilizationSystem, 0)
-	require.False(t, immediate)
+	next := p.Evaluate(UtilizationSystem, 0)
 	require.EqualValues(t, limit/2, next)
 
 	// at half; next = 75%.
-	next, immediate = p.Evaluate(UtilizationSystem, limit/2)
-	require.False(t, immediate)
+	next = p.Evaluate(UtilizationSystem, limit/2)
 	require.EqualValues(t, 3*(limit/4), next)
 
-	// at limit; immediate = true.
-	next, immediate = p.Evaluate(UtilizationSystem, limit)
-	require.True(t, immediate)
+	// at limit.
+	next = p.Evaluate(UtilizationSystem, limit)
 	require.EqualValues(t, limit, next)
 }
