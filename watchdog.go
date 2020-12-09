@@ -267,9 +267,19 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 		// initialize the threshold.
 		renewThreshold()
 
+		// initialize an empty timer.
+		timer := Clock.Timer(0)
+		stopTimer := func() {
+			if !timer.Stop() {
+				<-timer.C
+			}
+		}
+
 		for {
+			timer.Reset(frequency)
+
 			select {
-			case <-Clock.After(frequency):
+			case <-timer.C:
 				// get the current usage.
 				if err := sysmemFn(&sysmem); err != nil {
 					Logger.Warnf("failed to obtain system memory stats; err: %s", err)
@@ -290,7 +300,10 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 
 				renewThreshold()
 
+				stopTimer()
+
 			case <-_watchdog.closing:
+				stopTimer()
 				return
 			}
 		}

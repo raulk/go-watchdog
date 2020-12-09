@@ -52,7 +52,7 @@ func TestControl(t *testing.T) {
 
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	require.LessOrEqual(t, ms.NumGC, uint32(8)) // a maximum of 8 GCs should've happened.
+	require.LessOrEqual(t, ms.NumGC, uint32(5)) // a maximum of 8 GCs should've happened.
 	require.Zero(t, ms.NumForcedGC)             // no forced GCs.
 }
 
@@ -91,7 +91,7 @@ func TestHeapDriven(t *testing.T) {
 
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	require.GreaterOrEqual(t, ms.NumGC, uint32(10)) // over 12 GCs should've taken place.
+	require.GreaterOrEqual(t, ms.NumGC, uint32(9)) // over 9 GCs should've taken place.
 }
 
 func TestSystemDriven(t *testing.T) {
