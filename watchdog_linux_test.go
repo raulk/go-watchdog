@@ -19,6 +19,8 @@ import (
 var retained [][]byte
 
 func TestCgroupsDriven_Create_Isolated(t *testing.T) {
+	t.Skip("does not work on CI because cgroups are non writable")
+
 	skipIfNotIsolated(t)
 
 	if os.Getpid() == 1 {
