@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"testing"
 	"time"
 
@@ -14,29 +15,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These integration tests are a hugely non-deterministic, but necessary to get
-// good coverage and confidence. The Go runtime makes its own pacing decisions,
-// and those may vary based on machine, OS, kernel memory management, other
-// running programs, exogenous memory pressure, and Go runtime versions.
-//
-// The assertions we use here are lax, but should be sufficient to serve as a
-// reasonable litmus test of whether the watchdog is doing what it's supposed
-// to or not.
+const (
+	// EnvTestIsolated is a marker property for the runner to confirm that this
+	// test is running in isolation (i.e. a dedicated process).
+	EnvTestIsolated = "TEST_ISOLATED"
+
+	// EnvTestDockerMemLimit is the memory limit applied in a docker container.
+	EnvTestDockerMemLimit = "TEST_DOCKER_MEMLIMIT"
+)
+
+// DockerMemLimit is initialized in the init() function from the
+// EnvTestDockerMemLimit env variable.
+var DockerMemLimit int // bytes
+
+func init() {
+	Logger = &stdlog{log: log.New(os.Stdout, "[watchdog test] ", log.LstdFlags|log.Lmsgprefix), debug: true}
+
+	if l := os.Getenv(EnvTestDockerMemLimit); l != "" {
+		l, err := strconv.Atoi(l)
+		if err != nil {
+			panic(err)
+		}
+		DockerMemLimit = l
+	}
+}
+
+func skipIfNotIsolated(t *testing.T) {
+	if os.Getenv(EnvTestIsolated) != "1" {
+		t.Skipf("skipping test in non-isolated mode")
+	}
+}
 
 var (
 	limit uint64 = 64 << 20 // 64MiB.
 )
 
-func init() {
-	Logger = &stdlog{log: log.New(os.Stdout, "[watchdog test] ", log.LstdFlags|log.Lmsgprefix), debug: true}
-}
+func TestControl_Isolated(t *testing.T) {
+	skipIfNotIsolated(t)
 
-func TestControl(t *testing.T) {
 	debug.SetGCPercent(100)
 
-	// retain 1MiB every iteration, up to 100MiB (beyond heap limit!).
+	rounds := 100
+	if DockerMemLimit != 0 {
+		rounds /= int(float64(DockerMemLimit)*0.8) / 1024 / 1024
+	}
+
+	// retain 1MiB every iteration.
 	var retained [][]byte
-	for i := 0; i < 100; i++ {
+	for i := 0; i < rounds; i++ {
 		b := make([]byte, 1*1024*1024)
 		for i := range b {
 			b[i] = byte(i)
@@ -52,11 +78,13 @@ func TestControl(t *testing.T) {
 
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	require.LessOrEqual(t, ms.NumGC, uint32(5)) // a maximum of 8 GCs should've happened.
-	require.Zero(t, ms.NumForcedGC)             // no forced GCs.
+	require.NotZero(t, ms.NumGC)    // GCs have taken place, but...
+	require.Zero(t, ms.NumForcedGC) // ... no forced GCs beyond our initial one.
 }
 
-func TestHeapDriven(t *testing.T) {
+func TestHeapDriven_Isolated(t *testing.T) {
+	skipIfNotIsolated(t)
+
 	// we can't mock ReadMemStats, because we're relying on the go runtime to
 	// enforce the GC run, and the go runtime won't use our mock. Therefore, we
 	// need to do the actual thing.
@@ -66,7 +94,7 @@ func TestHeapDriven(t *testing.T) {
 	Clock = clk
 
 	observations := make([]*runtime.MemStats, 0, 100)
-	NotifyFired = func() {
+	NotifyGC = func() {
 		var ms runtime.MemStats
 		runtime.ReadMemStats(&ms)
 		observations = append(observations, &ms)
@@ -91,10 +119,12 @@ func TestHeapDriven(t *testing.T) {
 
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	require.GreaterOrEqual(t, ms.NumGC, uint32(9)) // over 9 GCs should've taken place.
+	require.GreaterOrEqual(t, ms.NumGC, uint32(5)) // over 5 GCs should've taken place.
 }
 
-func TestSystemDriven(t *testing.T) {
+func TestSystemDriven_Isolated(t *testing.T) {
+	skipIfNotIsolated(t)
+
 	debug.SetGCPercent(100)
 
 	clk := clock.NewMock()
@@ -115,7 +145,7 @@ func TestSystemDriven(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // give time for the watchdog to init.
 
 	notifyCh := make(chan struct{}, 1)
-	NotifyFired = func() {
+	NotifyGC = func() {
 		notifyCh <- struct{}{}
 	}
 

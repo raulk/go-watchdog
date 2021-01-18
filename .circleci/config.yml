@@ -1,13 +1,57 @@
 # Golang CircleCI 2.0 configuration file
-version: 2
-jobs:
-  build:
-    docker:
-      - image: circleci/golang:1.15
+version: 2.1
 
-    working_directory: /go/src/github.com/{{ORG_NAME}}/{{REPO_NAME}}
+parameters:
+  go-version:
+    type: string
+    default: "1.15.5"
+  workspace-dir:
+    type: string
+    default: "/home/circleci"
+
+commands:
+  setup:
+    description: "install go, checkout and restore cache"
     steps:
+      - run:
+          name: "install go"
+          command: |
+            curl --create-dirs -o $GOPATH/go.tar.gz https://dl.google.com/go/go${GOVERSION}.linux-amd64.tar.gz
+            tar --strip-components=1 -C $GOPATH -xzf $GOPATH/go.tar.gz
+            rm -rf $GOPATH/go.tar.gz
+      - checkout
+      - restore_cache:
+          keys:
+            - 'v2-pkg-cache-{{ checksum "go.sum" }}-{{ .Environment.GOVERSION }}'
+            - 'bin-cache-{{ .Branch }}'
+  setup-macos:
+    description: "install go, checkout and restore cache"
+    steps:
+      - run:
+          name: "install go on macOS"
+          command: |
+            brew --version
+            [ ! -d /usr/local/opt/go@1.14 ] && brew update && brew install go@1.14 && echo "done installing go"
+            echo 'export GOPATH="$HOME/go"' >> $BASH_ENV
+            echo 'export PATH="/usr/local/opt/go@1.14/bin:$GOPATH/bin:$PATH"' >> $BASH_ENV
+            source $BASH_ENV
+            go version
       - checkout
 
-      - run: go get -v -t -d ./...
-      - run: go test -v ./...
+executors:
+  linux:
+    machine:
+      image: ubuntu-1604:201903-01
+    working_directory: << pipeline.parameters.workspace-dir >>/project
+    environment:
+      GOPATH: << pipeline.parameters.workspace-dir >>/go/<< pipeline.parameters.go-version >>
+      PATH: << pipeline.parameters.workspace-dir >>/go/<< pipeline.parameters.go-version >>/bin:<< pipeline.parameters.workspace-dir >>/bin:/usr/local/bin:/usr/bin:/bin
+      GOVERSION: << pipeline.parameters.go-version >>
+
+jobs:
+  build:
+    executor: linux
+    steps:
+      - checkout
+      - setup
+      - run: make
