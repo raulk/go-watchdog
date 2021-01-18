@@ -1,6 +1,7 @@
 package watchdog
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -12,6 +13,10 @@ import (
 	"github.com/elastic/gosigar"
 	"github.com/raulk/clock"
 )
+
+// ErrNotSupported is returned when the watchdog does not support the requested
+// run mode in the current OS/arch.
+var ErrNotSupported = errors.New("watchdog run mode not supported")
 
 // PolicyTempDisabled is a marker value for policies to signal that the policy
 // is temporarily disabled. Use it when all hope is lost to turn around from
@@ -28,9 +33,8 @@ var (
 	// Clock can be used to inject a mock clock for testing.
 	Clock = clock.New()
 
-	// NotifyFired, if non-nil, will be called when the policy has fired,
-	// prior to calling GC, even if GC is disabled.
-	NotifyFired func() = func() {}
+	// NotifyGC, if non-nil, will be called when a GC has happened.
+	NotifyGC func() = func() {}
 )
 
 var (
@@ -104,6 +108,8 @@ const (
 	// UtilizationSystem specifies that the policy compares against actual used
 	// system memory.
 	UtilizationSystem UtilizationType = iota
+	// UtilizationProcess specifies that the watchdog is using process limits.
+	UtilizationProcess
 	// UtilizationHeap specifies that the policy compares against heap used.
 	UtilizationHeap
 )
@@ -126,13 +132,6 @@ type Policy interface {
 //
 // A zero-valued limit will error.
 func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) {
-	_watchdog.lk.Lock()
-	defer _watchdog.lk.Unlock()
-
-	if _watchdog.state != stateUnstarted {
-		return ErrAlreadyStarted, nil
-	}
-
 	if limit == 0 {
 		return fmt.Errorf("cannot use zero limit for heap-driven watchdog"), nil
 	}
@@ -142,9 +141,9 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 		return fmt.Errorf("failed to construct policy with limit %d: %w", limit, err), nil
 	}
 
-	_watchdog.state = stateRunning
-	_watchdog.scope = UtilizationHeap
-	_watchdog.closing = make(chan struct{})
+	if err := start(UtilizationHeap); err != nil {
+		return err, nil
+	}
 
 	gcTriggered := make(chan struct{}, 16)
 	setupGCSentinel(gcTriggered)
@@ -163,7 +162,7 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 		for {
 			select {
 			case <-gcTriggered:
-				NotifyFired()
+				NotifyGC()
 
 			case <-_watchdog.closing:
 				return
@@ -218,18 +217,12 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 // This threshold is calculated by querying the policy every time that GC runs,
 // either triggered by the runtime, or forced by us.
 func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) (err error, stopFn func()) {
-	_watchdog.lk.Lock()
-	defer _watchdog.lk.Unlock()
-
-	if _watchdog.state != stateUnstarted {
-		return ErrAlreadyStarted, nil
-	}
-
 	if limit == 0 {
-		limit, err = determineLimit(false)
-		if err != nil {
-			return err, nil
+		var sysmem gosigar.Mem
+		if err := sysmemFn(&sysmem); err != nil {
+			return fmt.Errorf("failed to get system memory stats: %w", err), nil
 		}
+		limit = sysmem.Total
 	}
 
 	policy, err := policyCtor(limit)
@@ -237,97 +230,92 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 		return fmt.Errorf("failed to construct policy with limit %d: %w", limit, err), nil
 	}
 
-	_watchdog.state = stateRunning
-	_watchdog.scope = UtilizationSystem
-	_watchdog.closing = make(chan struct{})
-
-	gcTriggered := make(chan struct{}, 16)
-	setupGCSentinel(gcTriggered)
+	if err := start(UtilizationSystem); err != nil {
+		return err, nil
+	}
 
 	_watchdog.wg.Add(1)
-	go func() {
-		defer _watchdog.wg.Done()
-
-		var (
-			memstats  runtime.MemStats
-			sysmem    gosigar.Mem
-			threshold uint64
-		)
-
-		renewThreshold := func() {
-			// get the current usage.
-			if err := sysmemFn(&sysmem); err != nil {
-				Logger.Warnf("failed to obtain system memory stats; err: %s", err)
-				return
-			}
-			// calculate the threshold.
-			threshold = policy.Evaluate(UtilizationSystem, sysmem.ActualUsed)
+	var sysmem gosigar.Mem
+	go pollingWatchdog(policy, frequency, func() (uint64, error) {
+		if err := sysmemFn(&sysmem); err != nil {
+			return 0, err
 		}
-
-		// initialize the threshold.
-		renewThreshold()
-
-		// initialize an empty timer.
-		timer := Clock.Timer(0)
-		stopTimer := func() {
-			if !timer.Stop() {
-				<-timer.C
-			}
-		}
-
-		for {
-			timer.Reset(frequency)
-
-			select {
-			case <-timer.C:
-				// get the current usage.
-				if err := sysmemFn(&sysmem); err != nil {
-					Logger.Warnf("failed to obtain system memory stats; err: %s", err)
-					continue
-				}
-				actual := sysmem.ActualUsed
-				if actual < threshold {
-					// nothing to do.
-					continue
-				}
-				// trigger GC; this will emit a gcTriggered event which we'll
-				// consume next to readjust the threshold.
-				Logger.Warnf("system-driven watchdog triggering GC; %d/%d bytes (used/threshold)", actual, threshold)
-				forceGC(&memstats)
-
-			case <-gcTriggered:
-				NotifyFired()
-
-				renewThreshold()
-
-				stopTimer()
-
-			case <-_watchdog.closing:
-				stopTimer()
-				return
-			}
-		}
-	}()
+		return sysmem.ActualUsed, nil
+	})
 
 	return nil, stop
 }
 
-func determineLimit(restrictByProcess bool) (uint64, error) {
-	// TODO.
-	// if restrictByProcess {
-	// 	if pmem := ProcessMemoryLimit(); pmem > 0 {
-	// 		Logger.Infof("watchdog using process limit: %d bytes", pmem)
-	// 		return pmem, nil
-	// 	}
-	// 	Logger.Infof("watchdog was unable to determine process limit; falling back to total system memory")
-	// }
+// pollingWatchdog starts a polling watchdog with the provided policy, using
+// the supplied polling frequency. On every tick, it calls usageFn and, if the
+// usage is greater or equal to the threshold at the time, it forces GC.
+// usageFn is guaranteed to be called serially, so no locking should be
+// necessary.
+func pollingWatchdog(policy Policy, frequency time.Duration, usageFn func() (uint64, error)) {
+	defer _watchdog.wg.Done()
 
-	// populate initial utilisation and system stats.
-	var sysmem gosigar.Mem
-	if err := sysmemFn(&sysmem); err != nil {
-		return 0, fmt.Errorf("failed to get system memory stats: %w", err)
+	gcTriggered := make(chan struct{}, 16)
+	setupGCSentinel(gcTriggered)
+
+	var (
+		memstats  runtime.MemStats
+		threshold uint64
+	)
+
+	renewThreshold := func() {
+		// get the current usage.
+		usage, err := usageFn()
+		if err != nil {
+			Logger.Warnf("failed to obtain memory utilization stats; err: %s", err)
+			return
+		}
+		// calculate the threshold.
+		threshold = policy.Evaluate(_watchdog.scope, usage)
 	}
-	return sysmem.Total, nil
+
+	// initialize the threshold.
+	renewThreshold()
+
+	// initialize an empty timer.
+	timer := Clock.Timer(0)
+	stopTimer := func() {
+		if !timer.Stop() {
+			<-timer.C
+		}
+	}
+
+	for {
+		timer.Reset(frequency)
+
+		select {
+		case <-timer.C:
+			// get the current usage.
+			usage, err := usageFn()
+			if err != nil {
+				Logger.Warnf("failed to obtain memory utilizationstats; err: %s", err)
+				continue
+			}
+			if usage < threshold {
+				// nothing to do.
+				continue
+			}
+			// trigger GC; this will emit a gcTriggered event which we'll
+			// consume next to readjust the threshold.
+			Logger.Warnf("system-driven watchdog triggering GC; %d/%d bytes (used/threshold)", usage, threshold)
+			forceGC(&memstats)
+
+		case <-gcTriggered:
+			NotifyGC()
+
+			renewThreshold()
+
+			stopTimer()
+
+		case <-_watchdog.closing:
+			stopTimer()
+			return
+		}
+	}
 }
 
 // forceGC forces a manual GC.
@@ -377,6 +365,20 @@ func setupGCSentinel(gcTriggered chan struct{}) {
 	}
 
 	runtime.SetFinalizer(&sentinel{}, finalizer) // start the flywheel.
+}
+
+func start(scope UtilizationType) error {
+	_watchdog.lk.Lock()
+	defer _watchdog.lk.Unlock()
+
+	if _watchdog.state != stateUnstarted {
+		return ErrAlreadyStarted
+	}
+
+	_watchdog.state = stateRunning
+	_watchdog.scope = scope
+	_watchdog.closing = make(chan struct{})
+	return nil
 }
 
 func stop() {
