@@ -38,6 +38,11 @@ func TestCgroupsDriven_Create_Isolated(t *testing.T) {
 func TestCgroupsDriven_Docker_Isolated(t *testing.T) {
 	skipIfNotIsolated(t)
 
+	if os.Getpid() != 1 {
+		// we are not running in a container.
+		t.Skipf("test only runs inside a container")
+	}
+
 	testCgroupsWatchdog(t, uint64(DockerMemLimit))
 }
 
