@@ -3,11 +3,18 @@ SHELL = /bin/bash
 .PHONY: test
 
 # these tests run in isolation by calling go test -run=... or the equivalent.
-ISOLATED_TESTS = TestControl_Isolated \
-				 TestSystemDriven_Isolated \
-				 TestHeapDriven_Isolated \
-				 TestCgroupsDriven_Create_Isolated \
-				 TestCgroupsDriven_Docker_Isolated
+ISOLATED_TESTS +=
+ifdef CI
+	ISOLATED_TESTS = TestControl_Isolated \
+					 TestSystemDriven_Isolated \
+					 TestHeapDriven_Isolated
+else
+	ISOLATED_TESTS = TestControl_Isolated \
+					 TestSystemDriven_Isolated \
+					 TestHeapDriven_Isolated \
+					 TestCgroupsDriven_Create_Isolated \
+					 TestCgroupsDriven_Docker_Isolated
+endif
 
 test: test-binary test-docker
 
@@ -27,4 +34,3 @@ test-docker: docker
 
 docker:
 	docker build -f ./Dockerfile.test  -t raulk/watchdog:latest .
-

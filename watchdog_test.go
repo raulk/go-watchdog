@@ -119,7 +119,7 @@ func TestHeapDriven_Isolated(t *testing.T) {
 
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	require.GreaterOrEqual(t, ms.NumGC, uint32(9)) // over 9 GCs should've taken place.
+	require.GreaterOrEqual(t, ms.NumGC, uint32(5)) // over 5 GCs should've taken place.
 }
 
 func TestSystemDriven_Isolated(t *testing.T) {
