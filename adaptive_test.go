@@ -11,18 +11,18 @@ func TestAdaptivePolicy(t *testing.T) {
 	clk := clock.NewMock()
 	Clock = clk
 
-	p, err := NewAdaptivePolicy(0.5)(limit)
+	p, err := NewAdaptivePolicy(0.5)(limit64MiB)
 	require.NoError(t, err)
 
 	// at zero; next = 50%.
 	next := p.Evaluate(UtilizationSystem, 0)
-	require.EqualValues(t, limit/2, next)
+	require.EqualValues(t, limit64MiB/2, next)
 
 	// at half; next = 75%.
-	next = p.Evaluate(UtilizationSystem, limit/2)
-	require.EqualValues(t, 3*(limit/4), next)
+	next = p.Evaluate(UtilizationSystem, limit64MiB/2)
+	require.EqualValues(t, 3*(limit64MiB/4), next)
 
-	// at limit.
-	next = p.Evaluate(UtilizationSystem, limit)
-	require.EqualValues(t, limit, next)
+	// at limit64MiB.
+	next = p.Evaluate(UtilizationSystem, limit64MiB)
+	require.EqualValues(t, limit64MiB, next)
 }

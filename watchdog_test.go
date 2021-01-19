@@ -2,8 +2,10 @@ package watchdog
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -47,7 +49,7 @@ func skipIfNotIsolated(t *testing.T) {
 }
 
 var (
-	limit uint64 = 64 << 20 // 64MiB.
+	limit64MiB uint64 = 64 << 20 // 64MiB.
 )
 
 func TestControl_Isolated(t *testing.T) {
@@ -101,7 +103,7 @@ func TestHeapDriven_Isolated(t *testing.T) {
 	}
 
 	// limit is 64MiB.
-	err, stopFn := HeapDriven(limit, NewAdaptivePolicy(0.5))
+	err, stopFn := HeapDriven(limit64MiB, NewAdaptivePolicy(0.5))
 	require.NoError(t, err)
 	defer stopFn()
 
@@ -138,7 +140,7 @@ func TestSystemDriven_Isolated(t *testing.T) {
 	}
 
 	// limit is 64MiB.
-	err, stopFn := SystemDriven(limit, 5*time.Second, NewAdaptivePolicy(0.5))
+	err, stopFn := SystemDriven(limit64MiB, 5*time.Second, NewAdaptivePolicy(0.5))
 	require.NoError(t, err)
 	defer stopFn()
 
@@ -155,20 +157,20 @@ func TestSystemDriven_Isolated(t *testing.T) {
 	require.Len(t, notifyCh, 0) // no GC has taken place.
 
 	// second tick; used = just over 50%; will trigger GC.
-	actualUsed = (limit / 2) + 1
+	actualUsed = (limit64MiB / 2) + 1
 	clk.Add(5 * time.Second)
 	time.Sleep(200 * time.Millisecond)
 	require.Len(t, notifyCh, 1)
 	<-notifyCh
 
 	// third tick; just below 75%; no GC.
-	actualUsed = uint64(float64(limit)*0.75) - 1
+	actualUsed = uint64(float64(limit64MiB)*0.75) - 1
 	clk.Add(5 * time.Second)
 	time.Sleep(200 * time.Millisecond)
 	require.Len(t, notifyCh, 0)
 
 	// fourth tick; 75% exactly; will trigger GC.
-	actualUsed = uint64(float64(limit)*0.75) + 1
+	actualUsed = uint64(float64(limit64MiB)*0.75) + 1
 	clk.Add(5 * time.Second)
 	time.Sleep(200 * time.Millisecond)
 	require.Len(t, notifyCh, 1)
@@ -177,4 +179,96 @@ func TestSystemDriven_Isolated(t *testing.T) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	require.GreaterOrEqual(t, ms.NumForcedGC, uint32(2))
+}
+
+// TestHeapdumpCapture tests that heap dumps are captured appropriately.
+func TestHeapdumpCapture(t *testing.T) {
+	debug.SetGCPercent(100)
+
+	dir, err := ioutil.TempDir("", "")
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+
+	assertFileCount := func(expected int) {
+		glob, err := filepath.Glob(filepath.Join(dir, "*"))
+		require.NoError(t, err)
+		require.Len(t, glob, expected)
+	}
+
+	HeapdumpDir = dir
+	HeapdumpThreshold = 0.5
+	HeapdumpMaxCaptures = 5
+
+	// mock clock.
+	clk := clock.NewMock()
+	Clock = clk
+
+	// mock the system reporting.
+	var actualUsed uint64
+	sysmemFn = func(g *gosigar.Mem) error {
+		g.ActualUsed = actualUsed
+		return nil
+	}
+
+	// init a system driven watchdog.
+	err, stopFn := SystemDriven(limit64MiB, 5*time.Second, NewAdaptivePolicy(0.5))
+	require.NoError(t, err)
+	defer stopFn()
+	time.Sleep(200 * time.Millisecond) // give time for the watchdog to init.
+
+	// first tick; used = 0.
+	clk.Add(5 * time.Second)
+	time.Sleep(200 * time.Millisecond)
+	assertFileCount(0)
+
+	// second tick; used = just over 50%; will trigger a heapdump.
+	actualUsed = (limit64MiB / 2) + 1
+	clk.Add(5 * time.Second)
+	time.Sleep(200 * time.Millisecond)
+	assertFileCount(1)
+
+	// third tick; continues above 50%; same episode, no heapdump.
+	actualUsed = (limit64MiB / 2) + 10
+	clk.Add(5 * time.Second)
+	time.Sleep(200 * time.Millisecond)
+	assertFileCount(1)
+
+	// fourth tick; below 50%; this resets the episodic flag.
+	actualUsed = limit64MiB / 3
+	clk.Add(5 * time.Second)
+	time.Sleep(200 * time.Millisecond)
+	assertFileCount(1)
+
+	// fifth tick; above 50%; this triggers a new heapdump.
+	actualUsed = (limit64MiB / 2) + 1
+	clk.Add(5 * time.Second)
+	time.Sleep(200 * time.Millisecond)
+	assertFileCount(2)
+
+	for i := 0; i < 20; i++ {
+		// below 50%; this resets the episodic flag.
+		actualUsed = limit64MiB / 3
+		clk.Add(5 * time.Second)
+		time.Sleep(200 * time.Millisecond)
+
+		// above 50%; this triggers a new heapdump.
+		actualUsed = (limit64MiB / 2) + 1
+		clk.Add(5 * time.Second)
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	assertFileCount(5) // we only generated 5 heap dumps even though we had more episodes.
+
+	// verify that heap dump file sizes aren't zero.
+	glob, err := filepath.Glob(filepath.Join(dir, "*"))
+	require.NoError(t, err)
+	for _, f := range glob {
+		fi, err := os.Stat(f)
+		require.NoError(t, err)
+		require.NotZero(t, fi.Size())
+	}
+
 }
