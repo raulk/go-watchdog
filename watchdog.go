@@ -175,6 +175,7 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 	_watchdog.wg.Add(1)
 	go func() {
 		defer _watchdog.wg.Done()
+		defer wdrecover() // recover from panics.
 
 		// get the initial effective GOGC; guess it's 100 (default), and restore
 		// it to whatever it actually was. This works because SetGCPercent
@@ -279,6 +280,7 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 // necessary.
 func pollingWatchdog(policy Policy, frequency time.Duration, limit uint64, usageFn func() (uint64, error)) {
 	defer _watchdog.wg.Done()
+	defer wdrecover() // recover from panics.
 
 	gcTriggered := make(chan struct{}, 16)
 	setupGCSentinel(gcTriggered)
@@ -479,4 +481,15 @@ func maybeCaptureHeapdump(usage, limit uint64) {
 	Logger.Infof("heap dump captured; path: %s", path)
 	_watchdog.hdcurr = true
 	_watchdog.hdleft--
+}
+
+func wdrecover() {
+	if r := recover(); r != nil {
+		msg := fmt.Sprintf("WATCHDOG PANICKED; recovered but watchdog is disarmed: %s", r)
+		if Logger != nil {
+			Logger.Errorf(msg)
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, msg)
+		}
+	}
 }

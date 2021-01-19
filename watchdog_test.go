@@ -1,7 +1,9 @@
 package watchdog
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -270,5 +272,33 @@ func TestHeapdumpCapture(t *testing.T) {
 		require.NoError(t, err)
 		require.NotZero(t, fi.Size())
 	}
+}
 
+type panickingPolicy struct{}
+
+func (panickingPolicy) Evaluate(_ UtilizationType, _ uint64) (_ uint64) {
+	panic("oops!")
+}
+
+func TestPanicRecover(t *testing.T) {
+	// replace the logger with one that tees into the buffer.
+	b := new(bytes.Buffer)
+	Logger.(*stdlog).log.SetOutput(io.MultiWriter(b, os.Stdout))
+
+	// simulate a polling watchdog with a panicking policy.
+	_watchdog.wg.Add(1)
+	pollingWatchdog(panickingPolicy{}, 1*time.Millisecond, 10000000, func() (uint64, error) {
+		return 0, nil
+	})
+	require.Contains(t, b.String(), "WATCHDOG PANICKED")
+
+	b.Reset() // reset buffer.
+	require.NotContains(t, b.String(), "WATCHDOG PANICKED")
+
+	// simulate a polling watchdog with a panicking usage.
+	_watchdog.wg.Add(1)
+	pollingWatchdog(&adaptivePolicy{factor: 0.5}, 1*time.Millisecond, 10000000, func() (uint64, error) {
+		panic("bang!")
+	})
+	require.Contains(t, b.String(), "WATCHDOG PANICKED")
 }
