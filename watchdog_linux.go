@@ -59,7 +59,7 @@ func CgroupDriven(frequency time.Duration, policyCtor PolicyCtor) (err error, st
 	}
 
 	_watchdog.wg.Add(1)
-	go pollingWatchdog(policy, frequency, func() (uint64, error) {
+	go pollingWatchdog(policy, frequency, limit, func() (uint64, error) {
 		stat, err := cgroup.Stat()
 		if err != nil {
 			return 0, err

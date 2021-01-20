@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -35,6 +37,25 @@ var (
 
 	// NotifyGC, if non-nil, will be called when a GC has happened.
 	NotifyGC func() = func() {}
+
+	// HeapdumpThreshold sets the utilization threshold that will trigger a
+	// heap dump to be taken automatically. A zero value disables this feature.
+	// By default, it is disabled.
+	HeapdumpThreshold float64
+
+	// HeapdumpMaxCaptures sets the maximum amount of heapdumps a process will generate.
+	// This limits the amount of episodes that will be captured, in case the
+	// utilization climbs repeatedly over the threshold. By default, it is 10.
+	HeapdumpMaxCaptures = uint(10)
+
+	// HeapdumpDir is the directory where the watchdog will write the heapdump.
+	// It will be created if it doesn't exist upon initialization. An error when
+	// creating the dir will not prevent heapdog initialization; it will just
+	// disable the heapdump capture feature. If zero-valued, the feature is
+	// disabled.
+	//
+	// Heapdumps will be written to path <HeapdumpDir>/<RFC3339Nano formatted timestamp>.heap.
+	HeapdumpDir string
 )
 
 var (
@@ -96,6 +117,9 @@ var _watchdog struct {
 	state int32
 
 	scope UtilizationType
+
+	hdleft uint // tracks the amount of heapdumps left.
+	hdcurr bool // tracks whether a heapdump has already been taken for this episode.
 
 	closing chan struct{}
 	wg      sync.WaitGroup
@@ -171,6 +195,8 @@ func HeapDriven(limit uint64, policyCtor PolicyCtor) (err error, stopFn func()) 
 			// recompute the next trigger.
 			memstatsFn(&memstats)
 
+			maybeCaptureHeapdump(memstats.HeapAlloc, limit)
+
 			// heapMarked is the amount of heap that was marked as live by GC.
 			// it is inferred from our current GOGC and the new target picked.
 			heapMarked := uint64(float64(memstats.NextGC) / (1 + float64(currGOGC)/100))
@@ -236,7 +262,7 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 
 	_watchdog.wg.Add(1)
 	var sysmem gosigar.Mem
-	go pollingWatchdog(policy, frequency, func() (uint64, error) {
+	go pollingWatchdog(policy, frequency, limit, func() (uint64, error) {
 		if err := sysmemFn(&sysmem); err != nil {
 			return 0, err
 		}
@@ -251,7 +277,7 @@ func SystemDriven(limit uint64, frequency time.Duration, policyCtor PolicyCtor) 
 // usage is greater or equal to the threshold at the time, it forces GC.
 // usageFn is guaranteed to be called serially, so no locking should be
 // necessary.
-func pollingWatchdog(policy Policy, frequency time.Duration, usageFn func() (uint64, error)) {
+func pollingWatchdog(policy Policy, frequency time.Duration, limit uint64, usageFn func() (uint64, error)) {
 	defer _watchdog.wg.Done()
 
 	gcTriggered := make(chan struct{}, 16)
@@ -295,6 +321,10 @@ func pollingWatchdog(policy Policy, frequency time.Duration, usageFn func() (uin
 				Logger.Warnf("failed to obtain memory utilizationstats; err: %s", err)
 				continue
 			}
+
+			// evaluate if a heapdump needs to be captured.
+			maybeCaptureHeapdump(usage, limit)
+
 			if usage < threshold {
 				// nothing to do.
 				continue
@@ -378,6 +408,9 @@ func start(scope UtilizationType) error {
 	_watchdog.state = stateRunning
 	_watchdog.scope = scope
 	_watchdog.closing = make(chan struct{})
+
+	initHeapdumpCapture()
+
 	return nil
 }
 
@@ -392,4 +425,58 @@ func stop() {
 	close(_watchdog.closing)
 	_watchdog.wg.Wait()
 	_watchdog.state = stateUnstarted
+}
+
+func initHeapdumpCapture() {
+	if HeapdumpDir == "" || HeapdumpThreshold <= 0 {
+		Logger.Debugf("heapdump capture disabled")
+		return
+	}
+	if HeapdumpThreshold >= 1 {
+		Logger.Warnf("failed to initialize heapdump capture: threshold must be 0 < t < 1")
+		return
+	}
+	if fi, err := os.Stat(HeapdumpDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(HeapdumpDir, 0777); err != nil {
+			Logger.Warnf("failed to initialize heapdump capture: failed to create dir: %s; err: %s", HeapdumpDir, err)
+			return
+		}
+	} else if err != nil {
+		Logger.Warnf("failed to initialize heapdump capture: failed to stat path: %s; err: %s", HeapdumpDir, err)
+		return
+	} else if !fi.IsDir() {
+		Logger.Warnf("failed to initialize heapdump capture: path exists but is not a directory: %s", HeapdumpDir)
+		return
+	}
+	// all good, set the amount of heapdump captures left.
+	_watchdog.hdleft = HeapdumpMaxCaptures
+	Logger.Infof("initialized heap dump capture; threshold: %f; max captures: %d; dir: %s", HeapdumpThreshold, HeapdumpMaxCaptures, HeapdumpDir)
+}
+
+func maybeCaptureHeapdump(usage, limit uint64) {
+	if _watchdog.hdleft <= 0 {
+		// nothing to do; no captures remaining (or captures disabled), or
+		// already captured a heapdump for this episode.
+		return
+	}
+	if float64(usage)/float64(limit) < HeapdumpThreshold {
+		// we are below the threshold, reset the hdcurr flag.
+		_watchdog.hdcurr = false
+		return
+	}
+	// we are above the threshold.
+	if _watchdog.hdcurr {
+		return // we've already captured this episode, skip.
+	}
+	path := filepath.Join(HeapdumpDir, time.Now().Format(time.RFC3339Nano)+".heap")
+	file, err := os.Create(path)
+	if err != nil {
+		Logger.Warnf("failed to write heapdump; failed to create file in path %s; err: %s", path, err)
+		return
+	}
+	defer file.Close()
+	debug.WriteHeapDump(file.Fd())
+	Logger.Infof("heap dump captured; path: %s", path)
+	_watchdog.hdcurr = true
+	_watchdog.hdleft--
 }
