@@ -29,7 +29,7 @@ type watermarkPolicy struct {
 var _ Policy = (*watermarkPolicy)(nil)
 
 func (w *watermarkPolicy) Evaluate(_ UtilizationType, used uint64) (next uint64) {
-	Logger.Debugf("watermark policy: evaluating; utilization: %d/%d (used/limit64MiB)", used, w.limit)
+	Logger.Debugf("watermark policy: evaluating; utilization: %d/%d (used/limit)", used, w.limit)
 	var i int
 	for ; i < len(w.thresholds); i++ {
 		t := w.thresholds[i]

@@ -22,7 +22,7 @@ func TestAdaptivePolicy(t *testing.T) {
 	next = p.Evaluate(UtilizationSystem, limit64MiB/2)
 	require.EqualValues(t, 3*(limit64MiB/4), next)
 
-	// at limit64MiB.
+	// at limit.
 	next = p.Evaluate(UtilizationSystem, limit64MiB)
 	require.EqualValues(t, limit64MiB, next)
 }
