@@ -105,7 +105,7 @@ func TestHeapDriven_Isolated(t *testing.T) {
 	}
 
 	// limit is 64MiB.
-	err, stopFn := HeapDriven(limit64MiB, NewAdaptivePolicy(0.5))
+	err, stopFn := HeapDriven(limit64MiB, 0, NewAdaptivePolicy(0.5))
 	require.NoError(t, err)
 	defer stopFn()
 
@@ -200,9 +200,9 @@ func TestHeapdumpCapture(t *testing.T) {
 		require.Len(t, glob, expected)
 	}
 
-	HeapdumpDir = dir
-	HeapdumpThreshold = 0.5
-	HeapdumpMaxCaptures = 5
+	HeapProfileDir = dir
+	HeapProfileThreshold = 0.5
+	HeapProfileMaxCaptures = 5
 
 	// mock clock.
 	clk := clock.NewMock()
