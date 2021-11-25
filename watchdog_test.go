@@ -148,27 +148,35 @@ func TestSystemDriven_Isolated(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond) // give time for the watchdog to init.
 
+	notifyChDeprecated := make(chan struct{}, 1)
 	notifyCh := make(chan struct{}, 1)
 	NotifyGC = func() {
-		notifyCh <- struct{}{}
+		notifyChDeprecated <- struct{}{}
 	}
+	RegisterNotifee(func() {
+		notifyCh <- struct{}{}
+	})
 
 	// first tick; used = 0.
 	clk.Add(5 * time.Second)
 	time.Sleep(200 * time.Millisecond)
+	require.Len(t, notifyChDeprecated, 0) // no GC has taken place.
 	require.Len(t, notifyCh, 0) // no GC has taken place.
 
 	// second tick; used = just over 50%; will trigger GC.
 	actualUsed = (limit64MiB / 2) + 1
 	clk.Add(5 * time.Second)
 	time.Sleep(200 * time.Millisecond)
+	require.Len(t, notifyChDeprecated, 1)
 	require.Len(t, notifyCh, 1)
+	<-notifyChDeprecated
 	<-notifyCh
 
 	// third tick; just below 75%; no GC.
 	actualUsed = uint64(float64(limit64MiB)*0.75) - 1
 	clk.Add(5 * time.Second)
 	time.Sleep(200 * time.Millisecond)
+	require.Len(t, notifyChDeprecated, 0)
 	require.Len(t, notifyCh, 0)
 
 	// fourth tick; 75% exactly; will trigger GC.
@@ -176,6 +184,8 @@ func TestSystemDriven_Isolated(t *testing.T) {
 	clk.Add(5 * time.Second)
 	time.Sleep(200 * time.Millisecond)
 	require.Len(t, notifyCh, 1)
+	require.Len(t, notifyChDeprecated, 1)
+	<-notifyChDeprecated
 	<-notifyCh
 
 	var ms runtime.MemStats

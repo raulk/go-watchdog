@@ -37,6 +37,7 @@ var (
 	Clock = clock.New()
 
 	// NotifyGC, if non-nil, will be called when a GC has happened.
+	// Deprecated: use RegisterNotifee instead.
 	NotifyGC func() = func() {}
 
 	// HeapProfileThreshold sets the utilization threshold that will trigger a
@@ -98,6 +99,8 @@ var (
 	// See: https://github.com/prometheus/client_golang/issues/403
 	memstatsFn = runtime.ReadMemStats
 	sysmemFn   = (*gosigar.Mem).Get
+
+	notifees []func()
 )
 
 var (
@@ -187,7 +190,7 @@ func HeapDriven(limit uint64, minGOGC int, policyCtor PolicyCtor) (err error, st
 		for {
 			select {
 			case <-gcTriggered:
-				NotifyGC()
+				notifyGC()
 
 			case <-_watchdog.closing:
 				return
@@ -339,7 +342,7 @@ func pollingWatchdog(policy Policy, frequency time.Duration, limit uint64, usage
 			forceGC(&memstats)
 
 		case <-gcTriggered:
-			NotifyGC()
+			notifyGC()
 
 			renewThreshold()
 
@@ -499,5 +502,19 @@ func wdrecover() {
 		} else {
 			_, _ = fmt.Fprintln(os.Stderr, msg)
 		}
+	}
+}
+
+// RegisterNotifee registers a function that will be called when a GC has happened.
+func RegisterNotifee(f func()) {
+	notifees = append(notifees, f)
+}
+
+func notifyGC() {
+	if NotifyGC != nil {
+		NotifyGC()
+	}
+	for _, f := range notifees {
+		f()
 	}
 }
