@@ -100,10 +100,14 @@ var (
 	memstatsFn = runtime.ReadMemStats
 	sysmemFn   = (*gosigar.Mem).Get
 
-	notifeeMutex    sync.Mutex
-	notifeeMaxIndex int
-	notifees        = make(map[int]func())
+	notifeeMutex sync.Mutex
+	notifees     []notifeeEntry
 )
+
+type notifeeEntry struct {
+	id int
+	f  func()
+}
 
 var (
 	// ErrAlreadyStarted is returned when the user tries to start the watchdog more than once.
@@ -513,14 +517,21 @@ func RegisterNotifee(f func()) (unregister func()) {
 	notifeeMutex.Lock()
 	defer notifeeMutex.Unlock()
 
-	id := notifeeMaxIndex
-	notifeeMaxIndex++
-	notifees[id] = f
+	var id int
+	if len(notifees) > 0 {
+		id = notifees[len(notifees)-1].id + 1
+	}
+	notifees = append(notifees, notifeeEntry{id: id, f: f})
 
 	return func() {
 		notifeeMutex.Lock()
-		delete(notifees, id)
-		notifeeMutex.Unlock()
+		defer notifeeMutex.Unlock()
+
+		for i, entry := range notifees {
+			if entry.id == id {
+				notifees = append(notifees[:i], notifees[i+1:]...)
+			}
+		}
 	}
 }
 
@@ -530,7 +541,7 @@ func notifyGC() {
 	}
 	notifeeMutex.Lock()
 	defer notifeeMutex.Unlock()
-	for _, f := range notifees {
-		f()
+	for _, entry := range notifees {
+		entry.f()
 	}
 }
