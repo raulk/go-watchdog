@@ -153,9 +153,10 @@ func TestSystemDriven_Isolated(t *testing.T) {
 	NotifyGC = func() {
 		notifyChDeprecated <- struct{}{}
 	}
-	RegisterNotifee("test notifee", func() {
+	unregister := RegisterNotifee(func() {
 		notifyCh <- struct{}{}
 	})
+	defer unregister()
 
 	// first tick; used = 0.
 	clk.Add(5 * time.Second)

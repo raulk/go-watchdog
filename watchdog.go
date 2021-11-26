@@ -100,8 +100,9 @@ var (
 	memstatsFn = runtime.ReadMemStats
 	sysmemFn   = (*gosigar.Mem).Get
 
-	notifeeMutex sync.Mutex
-	notifees     map[string]func()
+	notifeeMutex    sync.Mutex
+	notifeeMaxIndex int
+	notifees        = make(map[int]func())
 )
 
 var (
@@ -507,27 +508,20 @@ func wdrecover() {
 }
 
 // RegisterNotifee registers a function that will be called when a GC has happened.
-// tag is a unique tag that allows unregistering the notifee later using UnregisterNotifee.
-func RegisterNotifee(tag string, f func()) error {
+// The unregister function returned can be used to unregister this notifee.
+func RegisterNotifee(f func()) (unregister func()) {
 	notifeeMutex.Lock()
 	defer notifeeMutex.Unlock()
-	if notifees == nil {
-		notifees = make(map[string]func())
-	}
-	if _, ok := notifees[tag]; ok {
-		return fmt.Errorf("duplicate notifee with tag %s", tag)
-	}
-	notifees[tag] = f
-	return nil
-}
 
-// UnregisterNotifee unregisters a notifee.
-func UnregisterNotifee(tag string) {
-	notifeeMutex.Lock()
-	if notifees != nil {
-		delete(notifees, tag)
+	id := notifeeMaxIndex
+	notifeeMaxIndex++
+	notifees[id] = f
+
+	return func() {
+		notifeeMutex.Lock()
+		delete(notifees, id)
+		notifeeMutex.Unlock()
 	}
-	notifeeMutex.Unlock()
 }
 
 func notifyGC() {
