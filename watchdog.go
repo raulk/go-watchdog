@@ -37,6 +37,7 @@ var (
 	Clock = clock.New()
 
 	// NotifyGC, if non-nil, will be called when a GC has happened.
+	// Deprecated: use RegisterNotifee instead.
 	NotifyGC func() = func() {}
 
 	// HeapProfileThreshold sets the utilization threshold that will trigger a
@@ -98,7 +99,15 @@ var (
 	// See: https://github.com/prometheus/client_golang/issues/403
 	memstatsFn = runtime.ReadMemStats
 	sysmemFn   = (*gosigar.Mem).Get
+
+	notifeeMutex sync.Mutex
+	notifees     []notifeeEntry
 )
+
+type notifeeEntry struct {
+	id int
+	f  func()
+}
 
 var (
 	// ErrAlreadyStarted is returned when the user tries to start the watchdog more than once.
@@ -187,7 +196,7 @@ func HeapDriven(limit uint64, minGOGC int, policyCtor PolicyCtor) (err error, st
 		for {
 			select {
 			case <-gcTriggered:
-				NotifyGC()
+				notifyGC()
 
 			case <-_watchdog.closing:
 				return
@@ -339,7 +348,7 @@ func pollingWatchdog(policy Policy, frequency time.Duration, limit uint64, usage
 			forceGC(&memstats)
 
 		case <-gcTriggered:
-			NotifyGC()
+			notifyGC()
 
 			renewThreshold()
 
@@ -499,5 +508,40 @@ func wdrecover() {
 		} else {
 			_, _ = fmt.Fprintln(os.Stderr, msg)
 		}
+	}
+}
+
+// RegisterNotifee registers a function that will be called when a GC has happened.
+// The unregister function returned can be used to unregister this notifee.
+func RegisterNotifee(f func()) (unregister func()) {
+	notifeeMutex.Lock()
+	defer notifeeMutex.Unlock()
+
+	var id int
+	if len(notifees) > 0 {
+		id = notifees[len(notifees)-1].id + 1
+	}
+	notifees = append(notifees, notifeeEntry{id: id, f: f})
+
+	return func() {
+		notifeeMutex.Lock()
+		defer notifeeMutex.Unlock()
+
+		for i, entry := range notifees {
+			if entry.id == id {
+				notifees = append(notifees[:i], notifees[i+1:]...)
+			}
+		}
+	}
+}
+
+func notifyGC() {
+	if NotifyGC != nil {
+		NotifyGC()
+	}
+	notifeeMutex.Lock()
+	defer notifeeMutex.Unlock()
+	for _, entry := range notifees {
+		entry.f()
 	}
 }
