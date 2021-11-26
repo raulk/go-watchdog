@@ -153,7 +153,7 @@ func TestSystemDriven_Isolated(t *testing.T) {
 	NotifyGC = func() {
 		notifyChDeprecated <- struct{}{}
 	}
-	RegisterNotifee(func() {
+	RegisterNotifee("test notifee", func() {
 		notifyCh <- struct{}{}
 	})
 
@@ -161,7 +161,7 @@ func TestSystemDriven_Isolated(t *testing.T) {
 	clk.Add(5 * time.Second)
 	time.Sleep(200 * time.Millisecond)
 	require.Len(t, notifyChDeprecated, 0) // no GC has taken place.
-	require.Len(t, notifyCh, 0) // no GC has taken place.
+	require.Len(t, notifyCh, 0)           // no GC has taken place.
 
 	// second tick; used = just over 50%; will trigger GC.
 	actualUsed = (limit64MiB / 2) + 1
