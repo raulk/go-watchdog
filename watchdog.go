@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"runtime/pprof"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elastic/gosigar"
@@ -100,13 +101,24 @@ var (
 	memstatsFn = runtime.ReadMemStats
 	sysmemFn   = (*gosigar.Mem).Get
 
+	gcTriggered uint32 // to be used as an atomic bool
+
 	notifeeMutex sync.Mutex
 	notifees     []notifeeEntry
 )
 
+type GCTrigger string
+
+const (
+	GCTriggerGo       GCTrigger = "Go"
+	GCTriggerWatchdog GCTrigger = "watchdog"
+)
+
+type Notifee func(GCTrigger)
+
 type notifeeEntry struct {
 	id int
-	f  func()
+	f  Notifee
 }
 
 var (
@@ -370,6 +382,7 @@ func forceGC(memstats *runtime.MemStats) {
 	// finish before returning.
 	// finalizers are run in the sweep phase.
 	start := time.Now()
+	atomic.StoreUint32(&gcTriggered, 1)
 	runtime.GC()
 	took := time.Since(start)
 
@@ -513,7 +526,7 @@ func wdrecover() {
 
 // RegisterNotifee registers a function that will be called when a GC has happened.
 // The unregister function returned can be used to unregister this notifee.
-func RegisterNotifee(f func()) (unregister func()) {
+func RegisterNotifee(f Notifee) (unregister func()) {
 	notifeeMutex.Lock()
 	defer notifeeMutex.Unlock()
 
@@ -539,9 +552,13 @@ func notifyGC() {
 	if NotifyGC != nil {
 		NotifyGC()
 	}
+	trigger := GCTriggerGo
+	if wasTriggered := atomic.SwapUint32(&gcTriggered, 0); wasTriggered == 1 {
+		trigger = GCTriggerWatchdog
+	}
 	notifeeMutex.Lock()
 	defer notifeeMutex.Unlock()
 	for _, entry := range notifees {
-		entry.f()
+		entry.f(trigger)
 	}
 }
