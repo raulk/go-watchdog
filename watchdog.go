@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 	"runtime/pprof"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/elastic/gosigar"
@@ -100,8 +99,6 @@ var (
 	// See: https://github.com/prometheus/client_golang/issues/403
 	memstatsFn = runtime.ReadMemStats
 	sysmemFn   = (*gosigar.Mem).Get
-
-	gcTriggered uint32 // to be used as an atomic bool
 
 	notifeeMutex sync.Mutex
 	notifees     []notifeeEntry
@@ -208,7 +205,7 @@ func HeapDriven(limit uint64, minGOGC int, policyCtor PolicyCtor) (err error, st
 		for {
 			select {
 			case <-gcTriggered:
-				notifyGC()
+				notifyGC(GCTriggerGo)
 
 			case <-_watchdog.closing:
 				return
@@ -360,7 +357,7 @@ func pollingWatchdog(policy Policy, frequency time.Duration, limit uint64, usage
 			forceGC(&memstats)
 
 		case <-gcTriggered:
-			notifyGC()
+			notifyGC(GCTriggerGo)
 
 			renewThreshold()
 
@@ -376,13 +373,13 @@ func pollingWatchdog(policy Policy, frequency time.Duration, limit uint64, usage
 // forceGC forces a manual GC.
 func forceGC(memstats *runtime.MemStats) {
 	Logger.Infof("watchdog is forcing GC")
+	notifyGC(GCTriggerWatchdog)
 
 	// it's safe to assume that the finalizer will attempt to run before
 	// runtime.GC() returns because runtime.GC() waits for the sweep phase to
 	// finish before returning.
 	// finalizers are run in the sweep phase.
 	start := time.Now()
-	atomic.StoreUint32(&gcTriggered, 1)
 	runtime.GC()
 	took := time.Since(start)
 
@@ -548,13 +545,9 @@ func RegisterNotifee(f Notifee) (unregister func()) {
 	}
 }
 
-func notifyGC() {
+func notifyGC(trigger GCTrigger) {
 	if NotifyGC != nil {
 		NotifyGC()
-	}
-	trigger := GCTriggerGo
-	if wasTriggered := atomic.SwapUint32(&gcTriggered, 0); wasTriggered == 1 {
-		trigger = GCTriggerWatchdog
 	}
 	notifeeMutex.Lock()
 	defer notifeeMutex.Unlock()
