@@ -99,9 +99,6 @@ var (
 	// See: https://github.com/prometheus/client_golang/issues/403
 	memstatsFn = runtime.ReadMemStats
 	sysmemFn   = (*gosigar.Mem).Get
-
-	notifeeMutex sync.Mutex
-	notifees     []notifeeEntry
 )
 
 type notifeeEntry struct {
@@ -365,16 +362,19 @@ func pollingWatchdog(policy Policy, frequency time.Duration, limit uint64, usage
 func forceGC(memstats *runtime.MemStats) {
 	Logger.Infof("watchdog is forcing GC")
 
+	startNotify := time.Now()
+	notifyForcedGC()
 	// it's safe to assume that the finalizer will attempt to run before
 	// runtime.GC() returns because runtime.GC() waits for the sweep phase to
 	// finish before returning.
 	// finalizers are run in the sweep phase.
 	start := time.Now()
+	notificationsTook := start.Sub(startNotify)
 	runtime.GC()
 	took := time.Since(start)
 
 	memstatsFn(memstats)
-	Logger.Infof("watchdog-triggered GC finished; took: %s; current heap allocated: %d bytes", took, memstats.HeapAlloc)
+	Logger.Infof("watchdog-triggered GC finished; notifications took: %s, took: %s; current heap allocated: %d bytes", notificationsTook, took, memstats.HeapAlloc)
 }
 
 func setupGCSentinel(gcTriggered chan struct{}) {
@@ -508,40 +508,5 @@ func wdrecover() {
 		} else {
 			_, _ = fmt.Fprintln(os.Stderr, msg)
 		}
-	}
-}
-
-// RegisterNotifee registers a function that will be called when a GC has happened.
-// The unregister function returned can be used to unregister this notifee.
-func RegisterNotifee(f func()) (unregister func()) {
-	notifeeMutex.Lock()
-	defer notifeeMutex.Unlock()
-
-	var id int
-	if len(notifees) > 0 {
-		id = notifees[len(notifees)-1].id + 1
-	}
-	notifees = append(notifees, notifeeEntry{id: id, f: f})
-
-	return func() {
-		notifeeMutex.Lock()
-		defer notifeeMutex.Unlock()
-
-		for i, entry := range notifees {
-			if entry.id == id {
-				notifees = append(notifees[:i], notifees[i+1:]...)
-			}
-		}
-	}
-}
-
-func notifyGC() {
-	if NotifyGC != nil {
-		NotifyGC()
-	}
-	notifeeMutex.Lock()
-	defer notifeeMutex.Unlock()
-	for _, entry := range notifees {
-		entry.f()
 	}
 }
