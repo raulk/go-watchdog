@@ -36,6 +36,11 @@ var (
 	// Clock can be used to inject a mock clock for testing.
 	Clock = clock.New()
 
+	// ForcedGCFunc specifies the function to call when forced GC is necessary.
+	// Its default value is runtime.GC, but it can be set to debug.FreeOSMemory
+	// to force the release of memory to the OS.
+	ForcedGCFunc = runtime.GC
+
 	// NotifyGC, if non-nil, will be called when a GC has happened.
 	// Deprecated: use RegisterPostGCNotifee instead.
 	NotifyGC func() = func() {}
@@ -370,7 +375,7 @@ func forceGC(memstats *runtime.MemStats) {
 	// finalizers are run in the sweep phase.
 	start := time.Now()
 	notificationsTook := start.Sub(startNotify)
-	runtime.GC()
+	ForcedGCFunc()
 	took := time.Since(start)
 
 	memstatsFn(memstats)
