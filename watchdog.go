@@ -37,7 +37,7 @@ var (
 	Clock = clock.New()
 
 	// NotifyGC, if non-nil, will be called when a GC has happened.
-	// Deprecated: use RegisterNotifee instead.
+	// Deprecated: use RegisterPostGCNotifee instead.
 	NotifyGC func() = func() {}
 
 	// HeapProfileThreshold sets the utilization threshold that will trigger a

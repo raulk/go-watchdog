@@ -10,9 +10,10 @@ var (
 	forcedGCNotifees     []notifeeEntry
 )
 
-// RegisterNotifee registers a function that is called when a GC has happened.
+// RegisterPostGCNotifee registers a function that is called every time a GC has happened,
+// both GC runs triggered by the Go runtime and by watchdog.
 // The unregister function returned can be used to unregister this notifee.
-func RegisterNotifee(f func()) (unregister func()) {
+func RegisterPostGCNotifee(f func()) (unregister func()) {
 	gcNotifeeMutex.Lock()
 	defer gcNotifeeMutex.Unlock()
 
@@ -45,9 +46,10 @@ func notifyGC() {
 	}
 }
 
-// RegisterForcedGCNotifee registers a function that is called before watchdog triggers a GC run.
+// RegisterPreGCNotifee registers a function that is called before watchdog triggers a GC run.
+// It is ONLY called when watchdog triggers a GC run, not when the Go runtime triggers it.
 // The unregister function returned can be used to unregister this notifee.
-func RegisterForcedGCNotifee(f func()) (unregister func()) {
+func RegisterPreGCNotifee(f func()) (unregister func()) {
 	forcedGCNotifeeMutex.Lock()
 	defer forcedGCNotifeeMutex.Unlock()
 

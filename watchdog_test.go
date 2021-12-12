@@ -153,7 +153,7 @@ func TestSystemDriven_Isolated(t *testing.T) {
 	NotifyGC = func() {
 		notifyChDeprecated <- struct{}{}
 	}
-	unregister := RegisterNotifee(func() {
+	unregister := RegisterPostGCNotifee(func() {
 		notifyCh <- struct{}{}
 	})
 	defer unregister()
