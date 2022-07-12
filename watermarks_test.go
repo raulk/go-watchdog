@@ -3,7 +3,7 @@ package watchdog
 import (
 	"testing"
 
-	"github.com/raulk/clock"
+	"github.com/benbjohnson/clock"
 	"github.com/stretchr/testify/require"
 )
 

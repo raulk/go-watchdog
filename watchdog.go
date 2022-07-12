@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/elastic/gosigar"
-	"github.com/raulk/clock"
+	"github.com/benbjohnson/clock"
 )
 
 // ErrNotSupported is returned when the watchdog does not support the requested
