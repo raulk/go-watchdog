@@ -11,7 +11,7 @@ import (
 
 	"github.com/containerd/cgroups"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/raulk/clock"
+	"github.com/benbjohnson/clock"
 	"github.com/stretchr/testify/require"
 )
 

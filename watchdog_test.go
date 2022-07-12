@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/elastic/gosigar"
-	"github.com/raulk/clock"
+	"github.com/benbjohnson/clock"
 	"github.com/stretchr/testify/require"
 )
 
