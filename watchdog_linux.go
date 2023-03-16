@@ -90,9 +90,10 @@ func cgroupv2Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 	// use self path unless our PID is 1, in which case we're running inside
 	// a container and our limits are in the root path.
 
+	pid := os.Getpid()
 	path, err := cgroup2.PidGroupPath(pid)
-	if pid := os.Getpid(); err != nil || pid == 1 {
-		path = "/sys/fs/cgroup"
+	if err != nil {
+		return fmt.Errorf("failed to load cgroup path for process pid %d: %w", pid, err), nil
 	}
 
 	cgroup, err := cgroup2.Load(path)
