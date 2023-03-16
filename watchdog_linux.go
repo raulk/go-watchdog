@@ -93,12 +93,12 @@ func cgroupv2Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 	pid := os.Getpid()
 	path, err := cgroup2.PidGroupPath(pid)
 	if err != nil {
-		return fmt.Errorf("failed to load cgroup path for process pid %d: %w", pid, err), nil
+		return fmt.Errorf("failed to load cgroup2 path for process pid %d: %w", pid, err), nil
 	}
 
 	cgroup, err := cgroup2.Load(path)
 	if err != nil {
-		return fmt.Errorf("failed to load cgroup for process: %w", err), nil
+		return fmt.Errorf("failed to load cgroup2 for process: %w", err), nil
 	}
 
 	var limit uint64
@@ -111,7 +111,7 @@ func cgroupv2Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 	}
 
 	if limit == 0 {
-		return fmt.Errorf("cgroup limit is 0; refusing to start memory watchdog"), nil
+		return fmt.Errorf("cgroup2 limit is 0; refusing to start memory watchdog"), nil
 	}
 
 	policy, err := policyCtor(limit)
@@ -129,7 +129,7 @@ func cgroupv2Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 		if err != nil {
 			return 0, err
 		} else if stat.Memory == nil {
-			return 0, fmt.Errorf("cgroup memory stats are nil; aborting")
+			return 0, fmt.Errorf("cgroup2 memory stats are nil; aborting")
 		}
 		return stat.Memory.Usage, nil
 	})
