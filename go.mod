@@ -4,7 +4,6 @@ go 1.15
 
 require (
 	github.com/benbjohnson/clock v1.3.0
-	github.com/containerd/cgroups v1.1.0
 	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
