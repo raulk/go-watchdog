@@ -103,9 +103,9 @@ func cgroupv2Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 
 	var limit uint64
 	if stat, err := cgroup.Stat(); err != nil {
-		return fmt.Errorf("failed to load memory cgroup stats: %w", err), nil
+		return fmt.Errorf("failed to load cgroup2 memory stats: %w", err), nil
 	} else if stat.Memory == nil {
-		return fmt.Errorf("cgroup memory stats are nil; aborting"), nil
+		return fmt.Errorf("cgroup2 memory stats are nil; aborting"), nil
 	} else {
 		limit = stat.Memory.UsageLimit
 	}
