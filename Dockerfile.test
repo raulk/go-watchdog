@@ -1,4 +1,4 @@
-FROM golang:1.15.5
+FROM golang:1.20.1
 WORKDIR /watchdog
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go test -c -o watchdog.test

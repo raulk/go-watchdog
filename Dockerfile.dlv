@@ -7,7 +7,7 @@
 ##     --log-output=debugger,debuglineerr,gdbwire,lldbout,rpc \
 ##     --accept-multiclient --api-version=2 exec /root/watchdog.test
 ##
-FROM golang:1.15.5
+FROM golang:1.20.0
 WORKDIR /watchdog
 COPY . .
 RUN CGO_ENABLED=0 go get -ldflags "-s -w -extldflags '-static'" github.com/go-delve/delve/cmd/dlv
