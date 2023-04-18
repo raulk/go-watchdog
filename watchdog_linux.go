@@ -48,20 +48,20 @@ func cgroupv1Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 
 	cgroup, err := cgroup1.Load(path)
 	if err != nil {
-		return fmt.Errorf("failed to load cgroup for process: %w", err), nil
+		return fmt.Errorf("failed to load cgroup1 for process: %w", err), nil
 	}
 
 	var limit uint64
 	if stat, err := cgroup.Stat(); err != nil {
-		return fmt.Errorf("failed to load memory cgroup stats: %w", err), nil
+		return fmt.Errorf("failed to load memory cgroup1 stats: %w", err), nil
 	} else if stat.Memory == nil || stat.Memory.Usage == nil {
-		return fmt.Errorf("cgroup memory stats are nil; aborting"), nil
+		return fmt.Errorf("cgroup1 memory stats are nil; aborting"), nil
 	} else {
 		limit = stat.Memory.Usage.Limit
 	}
 
 	if limit == 0 {
-		return fmt.Errorf("cgroup limit is 0; refusing to start memory watchdog"), nil
+		return fmt.Errorf("cgroup1 limit is 0; refusing to start memory watchdog"), nil
 	}
 
 	policy, err := policyCtor(limit)
@@ -79,7 +79,7 @@ func cgroupv1Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 		if err != nil {
 			return 0, err
 		} else if stat.Memory == nil || stat.Memory.Usage == nil {
-			return 0, fmt.Errorf("cgroup memory stats are nil; aborting")
+			return 0, fmt.Errorf("cgroup1 memory stats are nil; aborting")
 		}
 		return stat.Memory.Usage.Usage, nil
 	})
