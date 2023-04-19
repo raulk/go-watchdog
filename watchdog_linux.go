@@ -46,7 +46,19 @@ func cgroupv1Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 		path = cgroup1.RootPath
 	}
 
-	cgroup, err := cgroup1.Load(path)
+	cgroup, err := cgroup1.Load(path, cgroup1.WithHiearchy(func() ([]cgroup1.Subsystem, error) {
+		system, err := cgroup1.Default()
+		if err != nil {
+			return nil, err
+		}
+		out := []cgroup1.Subsystem{}
+		for _, v := range system {
+			if v.Name() == cgroup1.Memory {
+				out = append(out, v)
+			}
+		}
+		return out, nil
+	}))
 	if err != nil {
 		return fmt.Errorf("failed to load cgroup1 for process: %w", err), nil
 	}
