@@ -64,7 +64,7 @@ func cgroupv1Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 	}
 
 	var limit uint64
-	if stat, err := cgroup.Stat(); err != nil {
+	if stat, err := cgroup.Stat(cgroup1.IgnoreNotExist); err != nil {
 		return fmt.Errorf("failed to load memory cgroup1 stats: %w", err), nil
 	} else if stat.Memory == nil || stat.Memory.Usage == nil {
 		return fmt.Errorf("cgroup1 memory stats are nil; aborting"), nil
