@@ -2,6 +2,7 @@ package watchdog
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -53,7 +54,8 @@ func cgroupv1Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 		}
 		out := []cgroup1.Subsystem{}
 		for _, v := range system {
-			if v.Name() == cgroup1.Memory {
+			switch v.Name() {
+			case cgroup1.Memory:
 				out = append(out, v)
 			}
 		}
@@ -64,11 +66,12 @@ func cgroupv1Driven(frequency time.Duration, policyCtor PolicyCtor) (err error, 
 	}
 
 	var limit uint64
-	if stat, err := cgroup.Stat(cgroup1.IgnoreNotExist); err != nil {
+	if stat, err := cgroup.Stat(); err != nil {
 		return fmt.Errorf("failed to load memory cgroup1 stats: %w", err), nil
 	} else if stat.Memory == nil || stat.Memory.Usage == nil {
 		return fmt.Errorf("cgroup1 memory stats are nil; aborting"), nil
 	} else {
+		log.Printf("stat: %v", stat.Memory.Usage)
 		limit = stat.Memory.Usage.Limit
 	}
 
