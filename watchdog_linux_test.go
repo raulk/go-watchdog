@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containerd/cgroups"
-	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/benbjohnson/clock"
+	"github.com/containerd/cgroups/v3"
+	"github.com/containerd/cgroups/v3/cgroup1"
+	"github.com/containerd/cgroups/v3/cgroup2"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,27 +95,39 @@ func testCgroupsWatchdog(t *testing.T, limit uint64) {
 	runtime.ReadMemStats(&memstats)
 	require.EqualValues(t, 2, memstats.NumForcedGC)
 }
+func createMemoryCgroup(t *testing.T, limit uint64) {
+	switch cgroups.Mode() {
+	case cgroups.Unified:
+		createMemoryCgroup2(t, limit)
+	case cgroups.Legacy:
+		createMemoryCgroup1(t, limit)
+	case cgroups.Unavailable:
+		fallthrough
+	default:
+		t.Logf("Cgroups not supported in this environment")
+	}
+}
 
 // createMemoryCgroup creates a memory cgroup to restrict the memory available
 // to this test.
-func createMemoryCgroup(t *testing.T, limit uint64) {
+func createMemoryCgroup1(t *testing.T, limit uint64) {
 	l := int64(limit)
-	path := cgroups.NestedPath(fmt.Sprintf("/%d", time.Now().UnixNano()))
-	cgroup, err := cgroups.New(cgroups.V1, path, &specs.LinuxResources{
+	path := cgroup1.NestedPath(fmt.Sprintf("/%d", time.Now().UnixNano()))
+	cgroup, err := cgroup1.New(path, &specs.LinuxResources{
 		Memory: &specs.LinuxMemory{
 			Limit: &l,
 			Swap:  &l,
 		},
 	})
 
-	require.NoError(t, err, "failed to create a cgroup")
+	require.NoError(t, err, "failed to create a cgroup1")
 	t.Cleanup(func() {
-		root, err := cgroups.Load(cgroups.V1, cgroups.RootPath)
+		root, err := cgroup1.Load(cgroup1.RootPath)
 		if err != nil {
 			t.Logf("failed to resolve root cgroup: %s", err)
 			return
 		}
-		if err = root.Add(cgroups.Process{Pid: pid}); err != nil {
+		if err = root.Add(cgroup1.Process{Pid: pid}); err != nil {
 			t.Logf("failed to move process to root cgroup: %s", err)
 			return
 		}
@@ -122,9 +136,39 @@ func createMemoryCgroup(t *testing.T, limit uint64) {
 		}
 	})
 
-	log.Printf("cgroup created")
+	log.Printf("cgroup1 created")
 
 	// add process to cgroup.
-	err = cgroup.Add(cgroups.Process{Pid: pid})
+	err = cgroup.Add(cgroup1.Process{Pid: pid})
+	require.NoError(t, err)
+}
+func createMemoryCgroup2(t *testing.T, limit uint64) {
+	l := int64(limit)
+	path := fmt.Sprintf("/%d", time.Now().UnixNano())
+	cgroup, err := cgroup2.NewManager("/sys/fs/cgroup", path, cgroup2.ToResources(&specs.LinuxResources{
+		Memory: &specs.LinuxMemory{
+			Limit: &l,
+			Swap:  &l,
+		},
+	}))
+	require.NoError(t, err, "failed to create a cgroup2")
+	t.Cleanup(func() {
+		root, err := cgroup2.Load("/")
+		if err != nil {
+			t.Logf("failed to resolve root cgroup2: %s", err)
+			return
+		}
+		if err = cgroup.MoveTo(root); err != nil {
+			t.Logf("failed to move processes to root cgroup2: %s", err)
+			return
+		}
+		if err = cgroup.Delete(); err != nil {
+			t.Logf("failed to clean up temp cgroup2: %s", err)
+		}
+	})
+	pids, _ := cgroup.Procs(false)
+	log.Printf("cgroup2 %d created, adding pid %d", pids, pid)
+	// add process to cgroup.
+	err = cgroup.AddProc(uint64(pid))
 	require.NoError(t, err)
 }
